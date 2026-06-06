@@ -1,0 +1,5679 @@
+---
+title: "TopicAnalysis_pipeline"
+author: "Maria D Hernandez Limon - MDHL"
+date: "2026-04-27"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+#data 
+FL <- Free Living prokaryotes 0.2-1.6um
+--SSF is the chloroplast from FL annoated with PRv5
+PA <- Particle Associated prokaryotes >1.6um
+--LSF is the chlororplast from PA annoated with PRv5
+
+#Background
+Text:
+https://academic.oup.com/biostatistics/article/20/4/599/5032578
+https://www.tidytextmining.com/topicmodeling.html
+Examples:
+https://github.com/lasy/alto/blob/master/vignettes/microbiome-demo.Rmd
+https://lasy.github.io/alto/articles/lda.html
+
+really helpful descriptions:
+https://www.analyticsvidhya.com/blog/2021/06/part-2-topic-modeling-and-latent-dirichlet-allocation-lda-using-gensim-and-sklearn/
+
+#1. Load libraries and set-up
+```{r}
+#install.packages("devtools")
+#devtools::install_github("lasy/alto")
+
+#install.packages("pak")
+#pak::pkg_install("lasy/alto")
+  
+library(alto) #breaks for me if I try to use anr R greater rgab 4.4.1
+library(topicmodels)
+library(betareg)
+
+library(dplyr)
+library(purrr)
+library(magrittr)
+library(ggplot2)
+library(tibble)
+library(stringr)
+library(tidyr)
+library(reshape)
+library(Hmisc)
+library(cluster)
+library(phyloseq)
+library(corrplot)
+#BiocManager::install("ComplexHeatmap")
+library(ComplexHeatmap)
+library(car)
+library(flextable)
+library(cowplot)
+library(ggpubr)
+library(RColorBrewer) 
+library(grid) 
+
+library(ggrepel)
+library(ggforce)
+```
+
+
+##colors
+```{r}
+phyla_colors <- c(
+  'Pseudomonadota'='#bae342',        # was Proteobacteria
+  'Cyanobacteriota'='#1c5b5a',       # was Cyanobacteria
+  'Actinomycetota'='#860967',        # was Actinobacteriota
+  'Bacillota'='blue',                # was Firmicutes
+  'Chloroflexota'='#888bce',         # was Chloroflexi
+  'Thermodesulfobacteriota'='salmon',# was Desulfobacterota
+  'Thermoproteota'='orange',         # was Crenarchaeota
+  'Verrucomicrobiota'='#dc5dd8',
+  'Bacteroidota'='#f92e5d',
+  'Planctomycetota'='#c0583d',
+  'Acidobacteriota'='#514e72',
+  'Nitrospirota'='#6edb9f',
+  'Bdellovibrionota'='yellow',
+  'Armatimonadota'='pink',
+  'Myxococcota'='lightblue',
+  'unclass_Bacteria'='maroon',
+  'unclass_Archaea'='orange4',
+  'Dependentiae'="red4", 
+  'Chlamydiota'="skyblue", 
+  'Gemmatimonadota'="green",
+  'Other'='gray'
+)
+
+class_colors <- c(
+  "Bacillariophyceae" = "#45AA45",   "Cryptophyceae" = "#FF800D",   "Prymnesiophyceae" = "#9467bd",
+  "Chlorophyceae" = "green",      "Eustigmatophyceae" = "#FFD0C9",   "Chrysophyceae" = "cyan",
+  "Trebouxiophyceae" = "#FEE11C",   "Diatomeae_X" = "#FF0073",     "Pavlovophyceae" = "navy",
+  "Dictyochophyceae" = "#90164F",   "Zygnemophyceae" = "#F6A5FD",  "Mamiellophyceae" = "red",
+  "Chlorodendrophyceae" = "olivedrab", "Euglenida" = "#9B5D00",      "Klebsormidiophyceae" = "#0D75F9",
+  "Xanthophyceae" = "#6C16A0",      "Pelagophyceae" = "#C2E1F1",   "Bangiophyceae" = "#BCEF00",
+  "Mediophyceae" = "#DEE99F",       "unclass_plas" = "black",      "Other" = "gray"
+)
+
+sf_colors <- c(
+  "FL_Prok" = "#1f78b4",   # blue
+  "PA_Prok" = "#b15928",   # brown
+  "SSF_Chloro" = "#33a02c",  # light green
+  "LSF_Chloro" = "#00441b"   # dark green
+)
+
+sf_colors2 <- c(
+  "FL" = "#1f78b4",   # blue
+  "PA" = "#b15928",   # brown
+  "SSF" = "#33a02c",  # light green
+  "LSF" = "#00441b",   # dark green
+  "Env" ="red"
+)
+
+year_colors=c('2012'='red','2013'='#A6CEE3','2014'='#B2DF8A','2015'="brown",
+                                 '2016'="violet",'2017'="purple",'2018'="blue",'2019'="black", "2022"="salmon")
+
+lake_shapes=c("SU"=21,"MI"=22, "HU"=23,"ER"=24,"ON"=25)
+
+year_shapes=c('2012'=0,'2013'=1,'2014'=2,'2015'=3,'2016'=4,'2017'=5,'2018'=6,'2019'=7, "2022"=21)
+
+depth_colors=c( "Top"="#90CAF9","Mid"="#1E88E5","Bot"="#0D47A1",
+                "EPI"="#F1B02FFF","DCL"="#59A55DFF","HYP"="#5E3194FF","TRM"="gray")
+
+depth_colors_w=c('Iso_Top'="#4CBED9FF","Iso_Mid"="#4CBED9FF","Iso_Bot"="#4CBED9FF",
+                 "InvS_EPI"="#C34582FF","InvS_TRM"="gray","InvS_HYP"="#9870B9FF",
+                "Strat_EPI"="#F1B02FFF","Iso_EPI"="red","Strat_TRM"="gray",
+                "Strat_DCL"="#59A55DFF","Strat_HYP"="#5E3194FF","Spring"="#7DA7EAFF")
+
+iso_colors=c("Top"="#90CAF9","Mid"="#1E88E5","Bot"="#0D47A1")
+invs_colors=c("EPI"="#C34582FF","TRM"="gray","HYP"="#9870B9FF")
+norm_colors=c("EPI"="#F1B02FFF","DCL"="#4DAF4A","TRM"="gray","HYP"="#5E3194FF")
+
+
+depth2_colors=c('Iso_Top'="#90CAF9","Iso_Mid"="#1E88E5","Iso_Bot"="#0D47A1",
+                "Strat_EPI"="#F1B02FFF","Strat_DCL"="#59A55DFF","Strat_HYP"="#5E3194FF",
+                "Strat_TRM"="gray","Iso_EPI"="red",
+                "InvS_EPI"="#C34582FF","InvS_TRM"="gray","InvS_HYP"="#9870B9FF")
+
+strat_colors=c("Iso"="#ffd700","InvS"="#80B1D3","Strat"="#FB8072","Norm"="#FB8072")
+
+lake_colors=c("SU"="#92809E","MI"="#8cabea", "HU"="#64baaa","ER"="#FFC86A","ON"="#ee7061")
+
+season_colors=c("Summer"="#F69541","Spring"="#7DA7EAFF","Winter"="#1D4497FF")
+
+```
+
+##data dirs
+```{r setup, include=TRUE}
+knitr::opts_knit$set("/Volumes/mlcoleman/project/greatlakes/combined_1618s_mdh/Analysis_with_both/LDA/to_share/")
+```
+
+```{r}
+FL_data<-readRDS("/Volumes/mlcoleman/project/greatlakes/combined_1618s_mdh/Manuscripts/PROK/test/data/ps1_FL.rds")
+PA_data<-readRDS("/Volumes/mlcoleman/project/greatlakes/combined_1618s_mdh/Manuscripts/PROK/test/data/ps1.rds")
+SSF_data<-readRDS("/Volumes/mlcoleman/project/greatlakes/combined_1618s_mdh/PC_FL/EUK_analysis/R_code/output/ps1_SSF.rds")
+LSF_data<-readRDS("/Volumes/mlcoleman/project/greatlakes/combined_1618s_mdh/MPBio_PA/EUK_analysis/R_code/output/ps1_LSF.rds")
+```
+
+#____________
+In this section I will introduce the functions that get used again for the different biological blocks
+
+```{r}
+#colors
+library(RColorBrewer)
+
+# Get the 10-color Paired palette
+paired_colors <- brewer.pal(10, "Paired")
+
+# Create FL colors
+FL_colors <- paired_colors
+names(FL_colors) <- paste0("FL_", seq_along(FL_colors))
+
+# Create PA colors (reusing the same palette)
+PA_colors <- paired_colors
+names(PA_colors) <- paste0("PA_", seq_along(PA_colors))
+
+# Combine into one named vector
+prok_scs <- c(FL_colors, PA_colors)
+
+prok_scs
+
+```
+
+#**FL**
+#2. Prep data 
+```{r}
+process_phyloseq <- function(ps) {
+  library(phyloseq)
+  
+  # Extract the three tables
+  if (taxa_are_rows(ps)) {
+    asv <- as.data.frame(t(otu_table(ps)))
+  } else {
+    asv <- as.data.frame(otu_table(ps))
+  }
+  
+  tax  <- as.data.frame(tax_table(ps))
+  meta <- as.data.frame(sample_data(ps))
+  
+  # Hand off to process_tables so we can clean if needed 
+  return(process_tables(asv, tax, meta))
+}
+
+process_tables <- function(asv, tax, meta) {
+  library(dplyr)
+  
+  tax$ASV <- rownames(tax)
+  
+  #we need asvs to be unique so we add a numer
+  tax_dict <- tax %>%
+    mutate(
+      ASV_name = paste0(
+        ifelse(is.na(Phylum), "[unknown Phylum]", Phylum),
+        " (",
+        ifelse(is.na(Order), "?", Order),
+        ") ",
+        row_number()
+      )
+    ) %>%
+    ungroup()
+  
+  tax_dict$ASV <- factor(tax_dict$ASV, levels = colnames(asv))
+  tax_dict <- tax_dict[order(tax_dict$ASV), ]
+  
+  colnames(asv) <- tax_dict$ASV_name
+  asv <- as.data.frame(asv) %>% mutate(across(everything(), as.integer))
+  
+  return(list(
+    counts   = as.data.frame(asv),
+    tax_dict = tax_dict,
+    meta     = meta
+  ))
+}
+```
+
+```{r}
+#this inlcudes counts, tax_dict, meta
+FL_results<-process_phyloseq(FL_data)
+
+#save the counts tables you will need for perplexity
+write.csv(FL_results$counts, "output/tables/runFL/FL_counts.csv")
+
+#free up some memoery we don't need the FL_data anymore and we can call it in if we do 
+rm(FL_data)
+gc()  
+
+```
+
+#3. Run LDA
+Our first step is to run the lda models for varying number of topics, i.e. from 1 to 20 topics.
+For this, we use the `run_lda_models` function. This can take a while on a personal computer but we will save the runs so future runs won't take long.
+
+### run LDA models 
+```{r run-lda-models}
+lda_varying_params_lists <-  list()
+for (k in 1:20) {lda_varying_params_lists[[paste0("k",k)]] <- list(k = k)}
+
+lda_models  <- 
+  run_lda_models(
+    data = FL_results$counts,
+    lda_varying_params_lists = lda_varying_params_lists,
+    lda_fixed_params_list = list(method = "VEM"),
+    dir = "../output/saved_models/runsFL/",
+    reset = FALSE, #set this to FALSE after running once you don't need to do this everytime
+    verbose = TRUE
+  )
+
+```
+
+
+### for diagnostics
+We will combine all the plots into one at the end of this section
+
+align the topics based on different methods
+```{r align-topics}
+
+aligned_topics_product <- 
+  align_topics(
+    models = lda_models,
+    method = "product") 
+
+plot(aligned_topics_product, color_by = "coherence")
+
+aligned_topics_transport <- 
+  align_topics(
+    models = lda_models,
+    method = "transport") 
+
+aligned_topics_transport@topics$coherence<-round(aligned_topics_transport@topics$coherence,1)
+plot(aligned_topics_transport, color_by = "coherence",label_topics = TRUE)
+```
+
+### top taxa alingment - k10
+```{r}
+aligned_topics_transport_k <- 
+  align_topics(
+    models = lda_models[c(1,10)],
+    method = "transport") 
+
+p<-plot(aligned_topics_transport_k,
+     add_leaves = TRUE, 
+     label_topics = TRUE,
+     n_features_in_leaves = 2,
+     min_feature_prop = 0.01,
+     leaves_text_size = 8,
+     color_by="topic",
+      model_name_repair_fun = function(x) str_remove_all(x, "k"))+
+     theme_bw()+
+    labs(x="")
+
+#ggsave(p, filename = "fl_k10.png", height = 5, width = 9, units = "cm", scale = 1.5)
+
+p
+```
+
+
+
+### perplexity
+use to confirm that k=10 looks good. SEE THE bash script you should run on HPC as it takes too long on a personal computer.
+https://stackoverflow.com/questions/21355156/topic-models-cross-validation-with-loglikelihood-or-perplexity
+https://medium.com/@priyankads/perplexity-of-language-models-41160427ed72
+https://datascience.stackexchange.com/questions/72882/topic-alignment-topic-modelling
+
+Perplexity - This is a statistical measure of how well a probability model predicts a sample. As applied to LDA, for a given value of k, you estimate the LDA model. Then given the theoretical word distributions represented by the topics, compare that to the actual topic mixtures, or distribution of words in your documents. - Lower the better.
+
+Result: We see the elbow at k=10 and this supports what we saw with ALTO so we proceed with K=10.
+
+The lower the value the better the training we did! Look for the elbow in the plot.
+
+```{r}
+## read in perplexity result from your script 
+
+FL_perplexity = read.csv("perplexity/FL_perplexity.csv",header=TRUE)
+
+p<-ggplot(FL_perplexity, aes(x = k, y = perplexity)) +
+   geom_point() +
+   geom_smooth(se = FALSE) +
+   theme_bw()+
+   labs(x = "Candidate number of topics", y = "Perplexity score")
+
+p
+```
+
+## diagnostic figure 
+```{r align-topics-viz-figure-2, echo = FALSE, eval = FALSE}
+
+
+make_figure2 <- function(aligned_topics_product,
+                        aligned_topics_transport,perplexity_df,size_fraction){
+  
+  ## some edits
+  aligned_topics_transport@topics$coherence<-round(aligned_topics_transport@topics$coherence,1)
+  
+  
+  n_paths_combined <- 
+    bind_rows(
+      compute_number_of_paths(aligned_topics_product) %>% 
+        mutate(method = "product"),
+      compute_number_of_paths(aligned_topics_transport) %>% 
+        mutate(method = "transport")
+    )
+  
+  ## a
+  g_key_topics <- 
+    ggplot(n_paths_combined, 
+           aes(x = n_topics,y = n_paths,col = method)) +
+    geom_abline(slope = 1, intercept = 0, col = "gray90", size = 2) +
+    geom_line() +
+    geom_point(size = 1) +
+    theme_minimal() +
+    labs(x="# of topics in model",y="# of paths",title=size_fraction) +
+    scale_x_continuous(breaks = 1:max(n_paths_combined$n_topics), minor_breaks = NULL) +
+    scale_y_continuous(breaks = 1:max(n_paths_combined$n_topics), minor_breaks = NULL) +
+    scale_color_manual("", values = c("coral","blue3")) + 
+    theme_bw()+
+    theme(
+      legend.position= c(0.2, 0.8),
+      legend.title = element_blank())
+  
+  
+  topics <- 
+    bind_rows(
+      aligned_topics_product@topics %>% mutate(method = "product"),
+      aligned_topics_transport@topics %>% mutate(method = "transport"),
+    ) %>% 
+    mutate(method = method %>% factor(., levels = c("transport","product"))) %>% 
+    group_by(method, m) %>% mutate(K = n(), r = refinement) %>% ungroup() 
+  
+  model_summary <- 
+    as.data.frame(topics) %>% 
+   dplyr::group_by(method, K) %>%
+    dplyr::summarize(
+      minr = min(r),
+      maxr = max(r), 
+      r = median(r),
+      .groups = "drop"
+    )
+  
+  ##b
+  g_coherence_transport <- 
+    plot_alignment(
+      aligned_topics_transport, 
+      color_by = "co", 
+      model_name_repair_fun = function(x) str_remove_all(x, "k"),
+      label_topics = TRUE,
+      n_features_in_leaves = 2
+    ) + 
+    theme_bw() +
+    labs(y="coherence score\ntransport method", x= "# of topics in model")+
+    theme(legend.position = "none")
+  
+  ##c
+  g_refinement_distribution <- 
+    ggplot(model_summary,
+           aes(x = K, y = r)) + 
+    geom_hline(yintercept = 0, col = "gray") +
+    geom_ribbon(aes(ymin = minr, ymax = maxr), fill = "gray", alpha = 0.5) +
+    geom_line(data = model_summary, col = "black", size = 1) +
+    geom_point(data = model_summary, col = "black", size = 2) +
+    geom_jitter(data = topics, aes(col = path), height = 0, width = 0.05, size = 1) +
+    facet_wrap(method ~ ., dir = "v") + 
+    scale_x_continuous(breaks = sort(unique(topics$K)), minor_breaks = NULL) +
+    scale_y_log10() +
+    scale_color_discrete(breaks = sort(unique(model_summary$K))) +
+    guides(col = "none")  +
+    xlab("# of topics in model") +
+    ylab("refinement score") + theme_bw()+
+    theme(axis.text.x = element_text(size=5))
+  
+  ##d
+  perplexity<-ggplot(perplexity_df, aes(x = k, y = perplexity)) +
+   geom_point() +
+   geom_smooth(se = FALSE) +
+   theme_bw()+
+   labs(x = "cadidate # of topics", y = "Perplexity score")
+  
+  figure = 
+    ggpubr::ggarrange(
+      g_key_topics,
+      g_coherence_transport,
+      g_refinement_distribution,
+      perplexity,
+      ncol = 2, nrow = 2,
+      heights = c(1, 1),
+      widths = c(4,5),
+      labels = c("a","b","c","d")
+    )
+  
+
+  figure
+}
+
+figure <- make_figure2(aligned_topics_product = aligned_topics_product, 
+                           aligned_topics_transport = aligned_topics_transport,
+                       perplexity_df=FL_perplexity,size_fraction="Free-Living Prokaryotes")
+
+
+ggsave(figure, filename = "output/plots/FL/diagnostics.png", height = 14, width = 21, units = "cm", scale = 1.5)
+
+figure
+```
+
+panel a k=10-12 plateau 
+panel b k=10-12 the scores are stable but break down (decraese after)
+panel c transport plateau k=9-12, while the product keeps climbing not imformative
+panel d perplexity elbow at a k=10 
+
+k=10 was selected as the optimal number of topics based on convergent evidence from path stability, coherence, refinement, and perplexity diagnostics, with higher k values yielding fragmented, redundant topics.
+
+
+### W and A
+```{r}
+W_FL = as.data.frame(lda_models$k10$gamma)
+colnames(W_FL)<- sub("V", "", colnames(W_FL))
+W_FL
+```
+```{r}
+A <-as.data.frame(exp(lda_models$k10$beta))
+A_df<-A ## to work on rare
+A <- A %>% mutate(topic = row_number())
+
+#change the ASV names 
+A_long<- melt.data.frame(A, id.vars = "topic",variable_name="ASV")
+
+# some cleaning up
+#A_long$value<-round(A_long$value,5)
+#A_long=subset(A_long, value>0)
+
+#change the order column
+A_long$Phyla<-sapply(strsplit(as.character(A_long$ASV)," "), "[", 1)
+A_long$Order<-paste(sapply(strsplit(as.character(A_long$ASV)," "), "[", 2),
+                    sapply(strsplit(as.character(A_long$ASV)," "), "[", 3),sep="_")
+A_long$Order_raw<-paste(sapply(strsplit(as.character(A_long$Order),"_"), "[", 1))
+
+#A_long_FL<- A_long
+#save(A_long_FL,file="../output/tables/w_matrix/fl_tax")
+
+
+A_long_FL <- A_long %>% mutate(asv_type=case_when(value >= 0.1 ~ ">=10%", value < 0.1 ~ "<10%"))
+A_long_FL
+```
+
+#4. Run GoMDE
+```{r}
+library(fastTopics)
+```
+
+## fun:run_gomde_markers
+```{r}
+run_gomde_markers <- function(counts, tax_dict, W, A_long, lfsr_cut = 0.05, top_n = 30) {
+
+  # align samples
+  keep <- intersect(rownames(W), rownames(counts))
+  W2 <- as.matrix(W[keep, , drop = FALSE])
+  X2 <- as.matrix(counts[keep, , drop = FALSE])
+
+  # normalize topic weights
+  W2 <- W2 / rowSums(W2)
+
+  # GoM DE
+  de <- de_analysis(fit = W2, X = X2, pseudocount = 0.1, shrink.method = "ash",lfc.stat = "le",)
+  #fits Poisson regressions for each ASV to estimate topic-specific parameters.
+  #the default fit.method is scaled coordinate descent
+
+  # tidy
+  gomde <- as.data.frame(de$postmean) %>%
+  rownames_to_column("ASV") %>%
+  pivot_longer(-ASV, names_to = "topic", values_to = "log2FC") %>%
+  left_join(
+    as.data.frame(de$z) %>%
+      rownames_to_column("ASV") %>%
+      pivot_longer(-ASV, names_to = "topic", values_to = "z"),
+    by = c("ASV","topic")
+  ) %>%
+  left_join(
+    as.data.frame(de$lfsr) %>%
+      rownames_to_column("ASV") %>%
+      pivot_longer(-ASV, names_to = "topic", values_to = "lfsr"),
+    by = c("ASV","topic")
+  )
+
+
+  #For each topic - we summarize the top_n most strongly enriched ASVs (by GoM DE effect size) as that topic’s diagnostic fingerprint.
+  top_markers <- gomde %>%
+  filter(lfsr < lfsr_cut, log2FC > 0) %>%
+  group_by(topic) %>%
+  slice_max(order_by = log2FC, n = top_n, with_ties = FALSE) %>%
+  ungroup() %>%
+  left_join(tax_dict, by = c("ASV" = "ASV_name"))
+
+  # overlap matrix
+  marker_lists <- top_markers %>%
+    group_by(topic) %>%
+    summarise(asvs = list(unique(ASV))) %>%
+    deframe()
+
+  topic_names <- names(marker_lists)
+  overlap_mat <- outer(
+    topic_names, topic_names,
+    Vectorize(function(t1, t2) length(intersect(marker_lists[[t1]], marker_lists[[t2]])))
+  )
+  rownames(overlap_mat) <- topic_names
+  colnames(overlap_mat) <- topic_names
+
+  list(
+    de = de,
+    gomde = gomde,
+    top_markers = top_markers, ## gomde subsetted and + taxonomy 
+    overlap_mat = overlap_mat ## print matrix of overlap
+  )
+}
+```
+
+```{r}
+#res_FL  <- run_gomde_markers(FL_results$counts, FL_results$tax_dict,W_FL,A_long_FL,  top_n = 25)
+
+#save so you don't have to re-computer
+saveRDS(res_FL,"output/objects/FL/res_FL.rds")
+res_FL<-readRDS("output/objects/FL/res_FL.rds")
+
+res_FL
+```
+```{r}
+subset(res_FL$gomde, lfsr <0.05 & log2FC>0 ) %>% 
+  distinct(ASV) %>% 
+  nrow()
+```
+
+```{r}
+marker_phy_summary_FL <- res_FL$top_markers %>%
+  count(topic, Phylum, sort = TRUE) %>%
+  group_by(topic) %>%
+  mutate(prop = n / sum(n)) %>%
+  arrange(topic, desc(prop)) %>% 
+  mutate(
+    topic= factor(paste0("FL_", topic), levels = paste0("FL_", 1:10)),
+    Phylum = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other"),
+    Phylum = factor(Phylum, levels =names(phyla_colors))
+  )
+
+marker_phy_summary_FL
+
+```
+
+## test to understand asvs in multiple topics
+```{r}
+pm_long<- as.data.frame(res_FL$de$postmean) %>%
+  tibble::rownames_to_column("ASV") %>% 
+  tidyr::pivot_longer(
+    -ASV,
+    names_to = "topic",
+    values_to = "postmean"
+  )
+
+lfsr_long <- as.data.frame(res_FL$de$lfsr) %>%
+  tibble::rownames_to_column("ASV") %>%
+  tidyr::pivot_longer(-ASV, names_to = "topic", values_to = "lfsr")
+
+pm_long <- left_join(pm_long, lfsr_long, by = c("ASV","topic"))
+
+example_asv<-"Acidobacteriota (Bryobacterales) 1424"
+# "Chloroflexi (Chloroflexales) 250"
+#Acidobacteriota (Holophagales) 3011
+# Acidobacteriota (Bryobacterales) 1424
+
+pm_long %>%
+  filter(ASV == example_asv) %>%
+  arrange(desc(postmean))
+
+pm_long
+
+pm_long %>%
+  filter(ASV == example_asv) 
+
+pm_long %>%
+  filter(ASV == example_asv) %>%
+  ggplot(aes(topic, postmean)) +
+  geom_col() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = example_asv, y = "l.e. log2FC")
+```
+
+
+```{r}
+get_le_comparisons <- function(de, asv, focal_topics = NULL) {
+  if (is.null(de$F)) stop("de$F not found. Need fitted rates to reconstruct pairwise LFCs.")
+  if (!asv %in% rownames(de$F)) stop("ASV not found in de$F rownames.")
+
+  F_row <- de$F[asv, ]
+  all_topics <- names(F_row)
+
+  if (is.null(focal_topics)) focal_topics <- all_topics
+  focal_topics <- intersect(focal_topics, all_topics)
+  if (length(focal_topics) == 0) stop("No focal_topics matched topic names in de$F.")
+
+  out <- lapply(focal_topics, function(j) {
+    others <- setdiff(all_topics, j)
+    lfc <- log2(F_row[j] / F_row[others])
+    tibble(
+      ASV = asv,
+      focal = j,
+      competitor = others,
+      log2FC = as.numeric(lfc)
+    ) %>%
+      mutate(
+        abs_log2FC = abs(log2FC),
+        is_closest = abs_log2FC == min(abs_log2FC)
+      ) %>%
+      arrange(abs_log2FC)
+  })
+
+  bind_rows(out)
+}
+
+plot_le_comparisons <- function(df_comp,asv_name, n_show = NULL) {
+  dfp <- df_comp
+  if (!is.null(n_show)) {
+    # keep the closest + the next (n_show-1) closest
+    dfp <- dfp %>%
+      group_by(focal) %>%
+      slice_head(n = n_show) %>%
+      ungroup()
+  }
+
+  dfp %>%
+    group_by(focal) %>%
+    mutate(competitor = factor(competitor, levels = competitor[order(log2FC)])) %>%
+    ungroup() %>%
+    ggplot(aes(x = competitor, y = log2FC, fill = is_closest)) +
+    geom_hline(yintercept = 0, linewidth = 0.3) +
+    geom_col() +
+    coord_flip() +
+    facet_wrap(~ focal, scales = "free_y") +
+    theme_bw() +
+    labs(
+      x = "Competitor topic",
+      y = "log2(F_focal / F_competitor)",
+      fill = "Closest rival",
+      title=paste0(asv_name)
+    )
+}
+```
+
+```{r}
+example_asv <- "Acidobacteriota (Holophagales) 3011"
+focals <- c("FL_6","FL_4", "FL_8")
+#focals <- c("FL_7","FL_4")
+
+df_comp <- get_le_comparisons(res_FL$de, example_asv, focal_topics = focals)
+
+# table view: closest competitor per focal topic
+df_comp %>%
+  filter(is_closest) %>%
+  select(ASV, focal, competitor, log2FC)
+
+# plot all competitors (can be busy if many topics)
+plot_le_comparisons(df_comp,example_asv)
+
+```
+
+
+
+
+
+
+
+
+## taxa distribution 
+```{r}
+res_FL$top_markers
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+library(dplyr)
+
+#grab data from full set not top25 -- but still only SPECIALIST
+mat_df <- res_FL$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>% #sig enrichment 
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%      # specialists only
+  ungroup() %>%
+  left_join(FL_results$tax_dict, by = c("ASV" = "ASV_name")) %>%
+  filter(!is.na(Order)) %>%
+  filter(!Order %in% c("Incertae Sedis", "unclass_Bacteria")) %>%
+  mutate(Phylum_clean = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other")) %>%
+  group_by(topic, Phylum, Phylum_clean, Order) %>%
+  dplyr::summarise(n_asv = n(), .groups = "drop")
+
+
+mat_df
+
+## collapse orders we only see in 1 topic
+min_asv <- 5  # orders with max < 3 across all topics become Other [Phylum]
+
+# build matrix
+# build full matrix first to know which orders are sparse
+mat_full <- mat_df %>%
+  group_by(Order, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order") %>%
+  as.matrix()
+
+# identify sparse orders
+sparse_orders <- rownames(mat_full)[apply(mat_full, 1, max) < min_asv]
+
+# collapse in mat_df
+mat_df_collapsed <- mat_df %>%
+  mutate(Order_plot = ifelse(Order %in% sparse_orders,
+                           ifelse(Phylum_clean == "Other", 
+                                  "Multiple (rare phyla)",  # catch the Other Other case this is when we made phyla other
+                                  paste0("Multiple ", Phylum_clean)),
+                           Order)) %>% 
+  group_by(topic, Phylum_clean, Order_plot) %>%
+  dplyr::summarise(n_asv = sum(n_asv), .groups = "drop")
+
+# rebuild matrix
+mat <- mat_df_collapsed %>%
+  group_by(Order_plot, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order_plot") %>%
+  as.matrix()
+
+mat <- mat[, order(as.numeric(colnames(mat)))]
+colnames(mat) <- paste0("FL_", colnames(mat))
+mat <- mat[rowSums(mat) > 0, ]
+
+# phylum annotation vector
+# phylum lookup including Other [Phylum] rows
+order_phylum <- mat_df_collapsed %>%
+  distinct(Order_plot, Phylum_clean) %>%
+  filter(Order_plot %in% rownames(mat))
+
+phylum_vec <- setNames(order_phylum$Phylum_clean, order_phylum$Order_plot)
+phylum_vec <- phylum_vec[rownames(mat)]
+
+# lighten phylum colors for Other rows
+lighten <- function(hex, factor = 0.5) {
+  rgb <- col2rgb(hex)
+  rgb_light <- rgb + (255 - rgb) * factor
+  rgb(rgb_light[1,], rgb_light[2,], rgb_light[3,], maxColorValue = 255)
+}
+
+# build annotation colors - named orders get full color, Other gets lightened
+row_colors <- sapply(rownames(mat), function(ord) {
+  phylum <- phylum_vec[ord]
+  base_col <- phyla_colors_clean[phylum]
+  if (grepl("^Multiple ", ord)) lighten(base_col, 0.5) else base_col
+})
+
+# for ComplexHeatmap we need the annotation to use the phylum color vector
+# but mark Other rows differently with a border or pattern - simplest is
+# just to show them as a named color per row
+row_annot <- rowAnnotation(
+  Phylum = phylum_vec,
+  col = list(Phylum = phyla_colors_clean),
+  show_annotation_name = FALSE,
+  annotation_legend_param = list(Phylum = list(ncol = 1)),
+  show_legend = TRUE  
+)
+
+
+# color scale
+col_fun <- colorRamp2(c(0, max(mat)), c("white", "#2C7FB8"))
+
+row_title <- rowAnnotation(
+  label = anno_text("Order", 
+                    rot = 90, 
+                    just = "center",
+                    gp = gpar(fontsize = 10, fontface = "bold")),
+  width = unit(0.8, "cm")
+)
+
+row_name_cols <- ifelse(grepl("^Multiple ", rownames(mat)), "grey50", "black")
+row_name_fontface <- ifelse(grepl("^Multiple ", rownames(mat)), "italic", "plain")
+
+ht_FL <- Heatmap(mat,
+  name = "ASV count",
+  col = col_fun,
+  left_annotation = row_annot,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  show_row_dend = TRUE,
+  show_heatmap_legend = FALSE,
+  row_names_gp = gpar(fontsize = 8,
+                      col = row_name_cols,
+                      fontface = row_name_fontface),
+  column_names_gp = gpar(fontsize = 10),
+  column_title = expression(bold("A") * " Fingerprint Taxa"),
+  column_title_gp = gpar(fontsize = 12, fontface = "bold"),
+  rect_gp = gpar(col = "grey90", lwd = 0.5),
+  width = unit(10, "cm"),
+  row_names_max_width = max_text_width(rownames(mat), gp = gpar(fontsize = 8)),
+  layer_fun = function(j, i, x, y, width, height, fill) {
+    v <- pindex(mat, i, j)
+    grid.text(ifelse(v > 0, as.character(v), ""), x, y,
+              gp = gpar(fontsize = 7, col = "grey20"))
+  },
+  row_title = "Order",
+  row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  row_title_side = "right"
+) 
+
+ggsave("output/plots/FL/GomDE_heat.pdf", fig4, width = 16, height = 8, units = "in", dpi = 600)
+
+ht_FL
+
+```
+
+```{r}
+row_annot2 <- rowAnnotation(
+  Phylum = phylum_vec,
+  col = list(Phylum = phyla_colors_clean),
+  show_annotation_name = FALSE,  # no label
+  show_legend = FALSE             # no legend
+)
+
+ht_FL2 <- Heatmap(mat,
+  name = "ASV count",
+  col = col_fun,
+  left_annotation = row_annot2,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  show_row_dend = TRUE,
+  show_heatmap_legend = FALSE,
+  row_names_gp = gpar(fontsize = 8,
+                      col = row_name_cols,
+                      fontface = row_name_fontface),
+  column_names_gp = gpar(fontsize = 10),
+  column_title = expression(bold("A") * " Fingerprint Taxa"),
+  column_title_gp = gpar(fontsize = 12, fontface = "bold"),
+  rect_gp = gpar(col = "grey90", lwd = 0.5),
+  width = unit(10, "cm"),
+  row_names_max_width = max_text_width(rownames(mat), gp = gpar(fontsize = 8)),
+  layer_fun = function(j, i, x, y, width, height, fill) {
+    v <- pindex(mat, i, j)
+    grid.text(ifelse(v > 0, as.character(v), ""), x, y,
+              gp = gpar(fontsize = 7, col = "grey20"))
+  },
+  row_title = "",
+  row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  row_title_side = "right"
+)
+
+ht_FL2
+```
+
+
+## top markers and all summary
+```{r}
+library(ggbeeswarm)
+```
+
+
+```{r}
+df_swarm <- res_FL$top_markers %>%
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%        # pecialists only
+  ungroup() %>%
+  mutate(
+    topic  = factor(topic),
+    Phylum = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other"),
+    Phylum = factor(Phylum, levels = names(phyla_colors))
+  )
+## there are 2 --SEE HEATMAT BELOW
+
+# pie composition per topic
+pie_df <- df_swarm %>%
+  count(topic, Phylum, name = "n") %>%
+  group_by(topic) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>%
+  select(topic, Phylum, prop) %>%
+  pivot_wider(names_from = Phylum, values_from = prop, values_fill = 0)
+
+# CONTROL PIE LOCATION (global annotation band)
+topic_levels <- levels(df_swarm$topic)
+pie_df <- pie_df %>%
+  mutate(x = as.numeric(factor(topic, levels = topic_levels)))
+
+y_max <- max(df_swarm$log2FC, na.rm = TRUE)
+pie_df$y <- y_max + 1.5   # <-- you can set this to whatever you want
+
+pie_cols <- intersect(names(pie_df), names(phyla_colors))
+
+## topic levels
+topic_levels <- df_swarm %>%
+  distinct(topic) %>%
+  arrange(as.numeric(sub(".*_", "", topic))) %>%
+  pull(topic)
+
+df_swarm$topic <- factor(df_swarm$topic, levels = topic_levels)
+pie_df$topic  <- factor(pie_df$topic,  levels = topic_levels)
+pie_df$x <- as.numeric(pie_df$topic)
+
+
+p_swarm_pie <- ggplot(df_swarm, aes(x = topic, y = log2FC, color = Phylum)) + #size = log2FC
+  geom_quasirandom(width = 0.3, alpha = .8,stroke = 0.9 ) +
+  scatterpie::geom_scatterpie(
+    data = pie_df,
+    aes(x = x, y = y),
+    cols = pie_cols,
+    pie_scale = 3,
+    color = "white",
+    linewidth = 0.3) +
+  scale_color_manual(values = phyla_colors) +
+  scale_fill_manual(values = phyla_colors) +
+  guides(fill = "none", color = guide_legend(ncol = 4,byrow = TRUE)) + #size = guide_legend(ncol = 1)
+  #guides(fill = "none")+
+  theme_bw() +
+  labs(x = "Topic", y = "GoM-DE log2FC - Top25 specilaists", color = "Phylum")+ #size = "log2FC"
+  coord_fixed(ratio = 0.6, ylim = c(0, y_max + 2))+
+  theme(
+    panel.grid.major.x = element_blank(),
+    legend.title = element_text(angle = 90),
+    legend.spacing.x = unit(0.1, "mm"),
+    legend.spacing.y = unit(0.1, "mm"),
+     legend.key.size = unit(1, "mm"),
+    legend.position = "bottom",
+    legend.direction = "horizontal")
+
+p_swarm_pie
+```
+## distribution of asvs heatmap
+```{r}
+asv_topic_sig <- res_FL$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>%            # enriched only
+  left_join(distinct(FL_results$tax_dict, ASV_name, Phylum),
+            by = c("ASV" = "ASV_name")) %>%
+  mutate(
+    Phylum = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other"),
+    Phylum = factor(Phylum, levels = names(phyla_colors))
+  ) %>%
+  group_by(ASV) %>%
+  summarise(
+    Phylum = dplyr::first(Phylum),
+    n_topics = n_distinct(topic),
+    max_log2FC = max(log2FC),
+    .groups = "drop"
+  )
+
+df_hm <- asv_topic_sig %>%
+  count(Phylum, n_topics)
+
+pheat<-ggplot(df_hm, aes(x = factor(n_topics), y = Phylum, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(
+    low = "#f2e5ff",
+    high = "#5b2a86"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank()
+  ) +
+  labs(
+    x = "# of topics where ASV is significantly enriched",
+    y = "Phylum",
+    fill = "ASV count",
+     title = paste0(
+      "Distribution of marker ASVs (n=",
+      nrow(asv_topic_sig),
+      ")"
+     )
+  )
+pheat
+```
+
+```{r}
+figure <-  ggpubr::ggarrange(pheat,p_swarm_pie, ncol = 2, nrow = 1,widths = c(.4,.6))
+
+figure<-annotate_figure(figure,
+                top = text_grob("Free-Living Prokaryotes", color = "black", face = "bold", size = 14))
+
+ggsave(file="output/plots/FL/gomde_FL_pie.pdf", figure,width = 12, height = 8, units = "in",dpi=600)
+
+figure
+```
+
+#5. Run Env Analysis
+
+### topic proportion across samples
+```{r}
+paired_colors_num <- brewer.pal(10, "Paired")  # Get the colors
+names(paired_colors_num) <- seq(1,10,1)
+paired_colors_num
+```
+
+```{r}
+## cluster by similarity
+w_den<-as.dendrogram(as.hclust(agnes(W_FL, diss=F, method =  "ward")),hang=.5)
+
+#data based on the clustering above 
+W_FL2<-W_FL #Some we don't mess up the original
+W_FL2$Sample_num<-row.names(W_FL)
+W_long_FL<- melt.data.frame(W_FL2, id.vars="Sample_num", variable_name="topic")
+
+plota_FL<-W_long_FL %>%
+      ggplot(aes(x=factor(Sample_num,level=labels(w_den)), value, fill=topic))+
+      geom_col(color=NA,width=1,linewidth=0)+
+      scale_fill_manual(values=paired_colors_num)+
+      labs(y="Subcommunity Proportion",
+           x=paste0("Samples (n=", dim(W_FL2)[1],")"),fill="SC#",
+           title=expression(bold("A") * ""))+ #Free Living Prokaryotes
+      theme_bw()+
+    scale_x_discrete(labels = NULL, breaks = NULL) + 
+    scale_y_continuous(breaks = seq(0, 1, 0.1),expand = c(0, 0))+
+      theme(axis.title.y = element_text(size = 10),
+             plot.title = element_text(face = "bold", size = 10),
+          axis.text.y = element_text(size = 10),
+          legend.key.height= unit(.05, 'in'),
+        legend.key.width= unit(.05, 'in'),
+        legend.box.spacing = unit(0.01, "pt"))
+
+ggsave("output/plots/FL/FL_structure.pdf", plota_FL, width = 7, height = 2.5, units = "in",dpi=600)
+plota_FL
+
+```
+
+```{r}
+FL_meta<-data.frame(FL_results$meta, check.names = FALSE)
+
+#PLOTS B-D: legend bars
+#get sample infor from main clean table
+sample_info<-FL_meta[,c('Sample_num','new_depths_mdh2','CTD_TEMP','SEASON','YEAR','lake')]
+#drop duplicates - because each OTU gets a value so we have many reps 
+colnames(sample_info)<-c('sample_id','depth','CTD_TEMP','SEASON','YEAR','lake')
+#reorder to match the order of the bar plots 
+sample_info<-sample_info %>% arrange(sample_id,levels=labels(w_den))
+sample_info$sample_id<- factor(sample_info$sample_id,level=labels(w_den))
+
+###make the bar plots 
+lake<-ggplot(data=sample_info, aes(x=sample_id, fill=lake)) + 
+  scale_fill_manual(values=lake_colors)+
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+season<-ggplot(data=sample_info, aes(x=sample_id, fill=SEASON)) + 
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=season_colors)+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+TEMP<-ggplot(data=sample_info, aes(x=sample_id, fill=CTD_TEMP)) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_gradient(low = "blue", high = "red")+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+  
+YEAR<-ggplot(data=sample_info, aes(x=sample_id, fill=factor(YEAR))) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=year_colors)+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+depth<-ggplot(data=sample_info, aes(x=sample_id, fill=depth)) + 
+  scale_fill_manual(values=depth_colors_w)+
+  geom_bar(width = 1,size=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+wx1=0.074
+wx2=0.728
+
+### value definitions
+names_depth=c("spr:","I","E","T","H","smr:","E","D","T","H")
+
+colors_depth= c(season_colors["Spring"],depth_colors_w["Iso_Top"], depth_colors_w["InvS_EPI"],
+          depth_colors_w["InvS_TRM"], depth_colors_w["InvS_HYP"], season_colors["Summer"],
+          depth_colors_w["Strat_EPI"],depth_colors_w["Strat_DCL"],depth_colors_w["Strat_TRM"],
+          depth_colors_w["Strat_HYP"])
+
+#change dynamically
+label_start   <- wx1 + wx2 + 0.01
+label_spacing <- 0.03
+
+season_locx <- label_start + c(0, 2)                            * label_spacing  # 2 labels
+lake_locx   <- label_start + c(0, 1, 2, 3, 4)                  * label_spacing  # 5 labels
+strata_locx <- label_start + c(0, 0.03, 0.04, 0.05, 0.06, 0.09, 0.12, 0.13, 0.14, 0.15)
+year_locx <- label_start + c(0, 0.02, 0.035, 0.05, 0.065, 0.08, 0.095, 0.11, 0.125) #8 labels
+temp_locx   <- label_start + c(0, 1, 2)                        * label_spacing  # 3 labels
+
+
+#gather all the plots
+FL_structure<- ggdraw()+ theme_void()+
+ draw_plot(plota_FL,x = 0, y = 0.25, width = 0.878, height = 0.75)+
+ draw_plot(season,x = wx1, y= 0.2, width = wx2, height = 0.05)+
+  draw_plot(lake,x = wx1, y=0.15, width = wx2, height = 0.05)+
+  draw_plot(depth,x = wx1, y = 0.1, width =wx2, height = 0.05)+
+  draw_plot(YEAR,x = wx1, y = 0.05, width =wx2, height = 0.05)+
+  draw_plot(TEMP,x = wx1, y = 0, width =wx2, height = 0.05)+
+  draw_plot_label(x = c(0.01,0.01,0.01,0.01,0.01), y = c(0.25,0.2,0.15,0.1,0.05), 
+                     label =  c("Season","Lake","Depth","Year","Temp"),
+                     hjust = 0, size = 7)+
+  draw_plot_label(x=c(season_locx,lake_locx, strata_locx, year_locx, temp_locx), #temp
+                  y=c(rep(0.25,2), #season x 2
+                      rep(0.2,5), #lake x5
+                      rep(0.15,10), #depth x 10
+                      rep(0.1,9), #year x 9
+                      rep(0.05,3)), #temp x3
+                  label=c('Spring','Summer',
+                          "SU","MI","HU","ER","ON",
+                          names_depth,
+                          "201","2","3","4","5","6","7","8","9",
+                          'Low','High', 'NA'), 
+                  color=c(season_colors["Spring"], season_colors["Summer"],
+                          "#92809E", "#8cabea", "#64baaa","#FFC86A","#ee7061",
+                          colors_depth,
+                          "gray",'red','#A6CEE3','#B2DF8A',"brown","violet","purple","blue","black",
+                          "blue","red","gray"),
+                  hjust = 0, size = 6 )
+
+
+  
+  
+ggsave("output/plots/FL/FL_sample_membership.pdf", FL_structure, width = 7, height = 3, units = "in",dpi=600)
+  
+FL_structure
+```
+
+### topic location
+```{r}
+#meta long
+FL_meta_long<- melt.data.frame(FL_meta, id.vars="Sample_num", variable_name="variable")
+
+highlighted_topics <- c(1,2,3,4,5,6,7,8,9,10)
+
+
+W_long_meta_FL<-full_join(FL_meta_long, W_long_FL, by = "Sample_num") 
+
+##to highlight a given topic we change alpha
+W_long_meta_FL<- W_long_meta_FL %>% mutate(
+    highlight = ifelse(as.character(topic) %in% highlighted_topics, "yes", "no")
+  )
+
+
+p_season<-subset(W_long_meta_FL,(variable == "SEASON") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(season_colors)),alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=season_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Season",title="",y="Relative contribution",x= "Subcommunity")+
+      theme(axis.title=element_text(size=8, face="bold"))
+
+p_season
+
+p_lake<-subset(W_long_meta_FL,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors)),alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Lake",title="",y="",x= "")
+p_lake
+
+p_layer<-subset(W_long_meta_FL,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors)),alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Layer",title="",y="",x= "")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+
+
+p_layer
+
+p_year<-subset(W_long_meta_FL,(variable == "YEAR") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(year_colors)),alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=year_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Year",title="",y="",x= "")+
+       theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+p_year
+
+p_status<-subset(W_long_meta_FL,(variable == "strat_status2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill= value.x,,alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=strat_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      labs(x="",y="", fill="Strat. Type")+
+      theme_classic()
+
+p_status
+
+# sample prop - how much does this sc represent overall 
+hold<-subset(W_long_meta_FL, variable == "YEAR")  #can be any variable 
+prop<-hold %>% group_by(topic) %>% dplyr::summarise(prop=round((sum(value.y)/sum(hold$value.y))*100))
+
+p_dist<-ggplot(prop, aes(x=topic, y=prop, fill=topic,)) +
+  geom_col() +
+  geom_text(aes(label=paste0(round(prop, 1), "%")), 
+            vjust=-0.5, 
+            size=3, 
+            fontface="bold") +  
+  scale_fill_brewer(palette="Paired") +
+  labs(x="", y="% of all sample distribution") +
+  theme_classic() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))+
+  theme(legend.position="none", 
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank(),
+        theme(axis.title=element_text(size=8, face="bold")))
+
+
+figure <- ggpubr::ggarrange(p_season, p_status, p_layer, p_lake, p_year,p_dist, ncol = 3, nrow = 2)
+figure <-ggpubr::annotate_figure(figure, 
+                        top = ggpubr::text_grob("FL PROK: Subcommunity distribution across samples", color = "black", 
+                                        face = "bold", size = 12))
+
+ggsave("output/plots/FL/FL_membership.pdf", figure, width = 9, height = 5, units = "in",dpi=600)
+
+figure
+
+```
+
+```{r}
+
+p_lake<-subset(W_long_meta_FL,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors)),alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Lake",title=expression(bold("B") * " Meta Overview"), 
+           y="Relative contribution",x= "Subcommunity")
+p_lake
+
+p_layer<-subset(W_long_meta_FL,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors)),alpha = highlight))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Layer",title="",y="Relative contribution",x= "Subcommunity")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+FL_meta_plt<- ggpubr::ggarrange(p_lake, p_layer, ncol = 2, nrow = 1)
+FL_meta_plt
+```
+
+### prep meta
+```{r}
+safe_logit <- function(x, eps = 1e-6) {
+  x <- pmin(pmax(x, eps), 1 - eps)
+  qlogis(x)
+}
+
+inv_logit <- function(x) {
+  plogis(x)
+}
+
+keep=c("Alkalinity..Total.as.CaCO3_mg.l","Chlorophyll.a_ug.l",
+       "Nitrogen..Total.Oxidized_mg.l","CTD_TEMP", "estimated_light_pcnt","Phosphorus..Total.as.P_ug.l",
+      "Silica..Dissolved.as.Si_mg.l","Turbidity_NTU", "abs_depth_m", "STN_DEPTH_M", 
+      "sbeox0Mg.L", "airT_14d_mean")
+
+param_order <- c(
+  "CTD_TEMP",
+  "airT_14d_mean",
+  "STN_DEPTH_M",
+  "abs_depth_m",
+  "sbeox0Mg.L",
+  "estimated_light_logit",
+  "Turbidity_NTU",
+  "Chlorophyll.a_ug.l",
+  "Alkalinity..Total.as.CaCO3_mg.l",
+  "Nitrogen..Total.Oxidized_mg.l",
+  "Phosphorus..Total.as.P_ug.l",
+  "Silica..Dissolved.as.Si_mg.l")
+
+meta_names<-read.csv("/Volumes/mlcoleman/project/greatlakes/Env_Metadata/meta_names.csv")
+
+## we will filter samples out if meta is missing so we will only use complete cases 
+prep_topic_meta <- function(W_X, X_meta,
+                             na_thresh = 0.2,
+                             light_var = "estimated_light_pcnt") {
+  
+  # check alignment
+  if (!all(rownames(W_X) == rownames(X_meta))) {
+    stop("rownames(W_X) and rownames(X_meta) are not identical and in the same order.")
+  }
+  
+  # keep selected vars
+  X_meta_num <- X_meta %>%
+    dplyr::select(all_of(keep)) %>%
+    dplyr::select(where(~ mean(is.na(.)) <= na_thresh))
+  
+  # transform light if present
+  if (light_var %in% colnames(X_meta_num)) {
+    X_meta_num <- X_meta_num %>%
+      mutate(
+        estimated_light_logit = safe_logit(.data[[light_var]] / 100)
+      ) %>%
+      select(-all_of(light_var))
+  }
+  
+  # scale
+  X_meta_num <- as.data.frame(scale(X_meta_num))
+  rownames(X_meta_num) <- rownames(X_meta)
+  
+  # remove incomplete cases
+  complete_rows <- complete.cases(X_meta_num)
+  cat("Rows with NAs:", sum(!complete_rows), "\n")
+  cat("Rows remaining:", sum(complete_rows), "\n")
+  
+  W_clean    <- W_X[complete_rows, ]
+  meta_clean <- X_meta_num[complete_rows, ]
+  
+  list(
+    W_clean      = W_clean,
+    meta_clean   = meta_clean,
+    meta_full    = X_meta_num,      # full metadata before removing NAs
+    complete_rows = complete_rows   # logical index in case needed downstream
+  )
+}
+
+prep_FL<- prep_topic_meta(W_FL, FL_meta)
+prep_FL
+```
+
+
+### Limma
+```{r}
+#pak::pkg_install("bioc::limma")
+library(limma)
+```
+
+Limma tests the observed effect. 
+for each topic, does environment make that topic go up or down compared to all the other topics?
+
+```{r}
+run_topic_clr_limma <- function(W_X,
+                                 X_meta_num,
+                                 eps = 1e-6,
+                                 add_intercept = TRUE) {
+
+  # --- drop samples with missing metadata ---
+  keep  <- complete.cases(X_meta_num)
+  W_use <- W_X[keep, , drop = FALSE]
+  X_use <- X_meta_num[keep, , drop = FALSE]
+
+  # --- CLR transform across full composition ---
+  W_clamped <- pmin(pmax(W_use, eps), 1 - eps)
+  log_W     <- log(W_clamped)
+  clr_W     <- log_W - rowMeans(log_W)   # subtract row-wise log geometric mean
+
+  # limma wants features x samples
+  Y_limma <- t(clr_W)
+
+  # --- design matrix ---
+  if (add_intercept) {
+    design <- model.matrix(~ ., data = X_use)
+  } else {
+    design <- model.matrix(~ 0 + ., data = X_use)
+  }
+
+  # --- fit limma ---
+  fit <- limma::lmFit(Y_limma, design)
+  fit <- limma::eBayes(fit)
+
+  # coefficients to report (drop intercept if present)
+  coef_names <- colnames(design)
+  if (add_intercept) {
+    coef_names <- setdiff(coef_names, "(Intercept)")
+  }
+
+  # --- collect results per coefficient ---
+  res_list <- lapply(coef_names, function(coef_nm) {
+    tt <- limma::topTable(
+      fit,
+      coef   = coef_nm,
+      number = Inf,
+      sort.by = "none"
+    )
+    tt$topic <- rownames(tt)
+    tt$term  <- coef_nm
+    tt
+  })
+
+  res_df <- dplyr::bind_rows(res_list) %>%
+    dplyr::as_tibble() %>%
+    dplyr::rename(
+      Estimate    = logFC,    # in CLR space: log-ratio effect vs geometric mean
+      p_value     = P.Value,
+      adj_p_value = adj.P.Val
+    ) %>%
+    dplyr::select(
+      topic, term, Estimate, AveExpr, t, B,
+      p_value, adj_p_value, everything()
+    ) %>%
+    dplyr::group_by(term) %>%
+    dplyr::mutate(adj_p_value_by_term = p.adjust(p_value, method = "BH")) %>%
+    dplyr::ungroup()
+
+  list(
+    clr_mat = clr_W,    # samples x topics in CLR space
+    design  = design,
+    fit     = fit,
+    res_df  = res_df
+  )
+}
+
+limma_res_FL_clr <- run_topic_clr_limma(prep_FL$W_clean, prep_FL$meta_clean)
+sig_limma_clr_FL  <- limma_res_FL_clr$res_df  %>% filter(adj_p_value_by_term < 0.05)
+sig_limma_clr_FL 
+```
+
+
+```{r}
+plot_limma <- function(sig_df, topic_order = NULL, title = "Limma Results", 
+                       meta_names = NULL, param_order = NULL) {
+  
+  # rename terms using meta_names if provided
+  if (!is.null(meta_names)) {
+    sig_df <- sig_df %>%
+      mutate(term = trimws(term)) %>%
+      left_join(meta_names %>% mutate(original = trimws(original)),
+                by = c("term" = "original")) %>%
+      mutate(term = coalesce(new, term))
+  }
+  
+  # order topics
+  if (!is.null(topic_order)) {
+    sig_df <- sig_df %>%
+      mutate(topic = factor(topic, levels = topic_order))
+  }
+  
+  # translate param_order to new names if meta_names provided
+  if (!is.null(param_order) && !is.null(meta_names)) {
+    new_order <- meta_names$new[match(param_order, meta_names$original)]
+    sig_df <- sig_df %>%
+      mutate(term = factor(term, levels = new_order))
+  } else if (!is.null(param_order)) {
+    sig_df <- sig_df %>%
+      mutate(term = factor(term, levels = param_order))
+  } else {
+    term_order <- sig_df %>%
+      count(term) %>%
+      arrange(n) %>%
+      pull(term)
+    sig_df <- sig_df %>%
+      mutate(term = factor(term, levels = term_order))
+  }
+  
+  ggplot(sig_df, aes(x = topic, y = term, fill = Estimate)) +
+    geom_tile() +
+    geom_text(aes(label = round(Estimate, 2)), size = 3) +
+    scale_fill_gradient2(
+      low      = "#3B82F6",
+      mid      = "white",
+      high     = "#EF4444",
+      midpoint = 0
+    ) +
+    scale_y_discrete(drop = FALSE) +  # <-- keeps all factor levels even those without sig
+    labs(
+      x        = "Subcommunity",
+      y        = "",
+      fill     = "Estimate",
+      title    = title,
+      subtitle = "\n BH adj p < 0.05"
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid      = element_blank(),
+      axis.line       = element_line(colour = "black"),
+      legend.position = "none", 
+      plot.title      = element_text(face = "bold"),
+    ) 
+}
+
+# call with meta_names and param_order passed in
+FL_limma_crl <- plot_limma(
+  sig_limma_clr_FL ,
+  topic_order = colnames(prep_FL$W_clean),
+  title       = expression(bold("C") * " Limma"),
+  meta_names  = meta_names,
+  param_order = param_order
+)
+
+FL_limma_crl
+
+#ggsave("../output/plots/FL/FL_limma.png", FL_limma_crl, width = 8, height = 6, units = "in",dpi=600)
+```
+
+
+
+##RM + SHAP
+We fit a Random Forest (RF) model to predict topic proportions from environmental metadata using the ranger package in R. Topic proportions were logit-transformed prior to fitting to address the bounded (0,1) nature of the response. For each topic, a separate RF model was trained with 500 trees, mtry = √p (where p is the number of predictors), and minimum node size of 5. Model performance was assessed using out-of-bag (OOB) R² (fit$r.squared from ranger), which provides a robust generalization estimate equivalent to LOO-CV — each sample is predicted only by trees for which it was not used in training (~37% of samples per tree, all samples predicted across the full forest). Variable importance was computed using impurity-based importance (mean decrease in node impurity). 
+```{r}
+library(ranger)
+```
+```{r}
+run_rf_oob_clr <- function(W_clean, meta_clean) {
+  
+  # CLR transform on full composition matrix
+  # log(x_i / geometric_mean(x)) for each document
+  clr_transform <- function(W) {
+    log_W     <- log(W + 1e-10)           # small epsilon guards any zeros
+    gm        <- rowMeans(log_W)           # log geometric mean per document
+    sweep(log_W, 1, gm, "-")              # subtract row-wise
+  }
+  
+  clr_back_transform <- function(clr_W) {
+    # softmax-style back transform to proportions
+    exp_W <- exp(clr_W)
+    sweep(exp_W, 1, rowSums(exp_W), "/")
+  }
+  
+  W_clr     <- clr_transform(W_clean)
+  topics    <- colnames(W_clean)
+  n_samples <- nrow(W_clean)
+  
+  rf_pred   <- matrix(NA, nrow = n_samples, ncol = length(topics),
+                      dimnames = list(rownames(W_clean), topics))
+  rf_models <- list()
+  
+  for (topic in topics) {
+    y  <- W_clr[, topic]                  # CLR-transformed outcome, unconstrained
+    df <- data.frame(y = y, meta_clean)
+    
+    fit <- ranger::ranger(
+      y ~ .,
+      data          = df,
+      num.trees     = 500,
+      mtry          = floor(sqrt(ncol(meta_clean))),
+      min.node.size = 5,
+      importance    = "permutation",
+      oob.error     = TRUE
+    )
+    
+    rf_models[[topic]] <- fit
+  }
+  
+  # collect CLR predictions then back-transform together
+  # important: back-transform needs all topics simultaneously
+  clr_pred <- W_clr
+  for (topic in topics) {
+    clr_pred[, topic] <- rf_models[[topic]]$predictions
+  }
+  rf_pred <- clr_back_transform(clr_pred)
+  
+  rf_perf <- data.frame(
+    Topic = topics,
+    R2    = sapply(rf_models, function(m) m$r.squared),
+    RMSE  = sapply(topics, function(topic) {
+      obs  <- W_clr[, topic]
+      pred <- rf_models[[topic]]$predictions
+      sqrt(mean((obs - pred)^2))
+    })
+  )
+  rownames(rf_perf) <- NULL
+  
+  list(
+    rf_pred   = rf_pred,       # back-transformed to proportion space
+    clr_pred  = clr_pred,      # CLR space predictions, useful for diagnostics
+    rf_models = rf_models,
+    rf_perf   = rf_perf
+  )
+}
+
+results_clr_FL <- run_rf_oob_clr(prep_FL$W_clean, prep_FL$meta_clean)
+results_clr_FL
+```
+
+```{r}
+plot_fit <- function(W_clean, pred_mat, perf_df, model_name = "RF") {
+  
+  topics <- colnames(W_clean)
+  
+  observed_long <- W_clean %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column("Sample") %>%
+    tidyr::pivot_longer(-Sample, names_to = "Topic", values_to = "Observed")
+  
+  predicted_long <- pred_mat %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column("Sample") %>%
+    tidyr::pivot_longer(-Sample, names_to = "Topic", values_to = "Predicted")
+  
+  plot_df <- left_join(observed_long, predicted_long, by = c("Sample", "Topic"))
+  
+  r2_labels <- perf_df %>%
+    mutate(Topic = factor(Topic, levels = topics),
+           label = paste0("R² = ", round(R2, 2)))
+  
+  ggplot(plot_df, aes(x = Observed, y = Predicted)) +
+    geom_point(alpha = 0.5) +
+    geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+    facet_wrap(~ Topic, ncol = 5) +
+    geom_text(
+      data = r2_labels,
+      aes(x = 0.5, y = Inf, label = label),
+      hjust = 1.1, vjust = 1.2, inherit.aes = FALSE, size = 3
+    ) +
+    coord_equal() +
+    theme_bw() +
+    labs(
+      x     = "Observed topic proportion",
+      y     = paste(model_name, "predicted topic proportion"),
+      title = paste(model_name)
+    )
+}
+
+plot_fit(prep_FL$W_clean, results_clr_FL$rf_pred,  results_clr_FL$rf_perf,  model_name = "RF CLR")
+```
+
+```{r}
+library(fastshap)
+library(parallel)
+```
+shap - how much did this one variable contribute to pushing the prediction away from the average prediction?
+
+SHapley Additive exPlanations
+
+The theoretically exact SHAP value requires trying every possible combination of variables which is computationally explosive. fastshap uses a Monte Carlo approximation:
+For each sample and each variable it:
+
+Takes the real value of that variable for that sample
+Randomly shuffles all other variables from other samples
+Compares the prediction with the real value vs a random value for that variable
+Repeats this nsim = 100 times and averages
+
+The result is an estimate of "how much does knowing the true value of this variable change the prediction compared to not knowing it" — that's your SHAP value.
+
+```{r}
+run_shap_direction <- function(rf_models, meta_clean, nsim = 100, seed = 42, 
+                                n_cores = parallel::detectCores() - 4) {
+  
+  pfun <- function(object, newdata) {
+    ranger:::predict.ranger(object, data = newdata)$predictions
+  }
+  
+  # Register parallel backend for fastshap
+  cl <- parallel::makeCluster(n_cores)
+  doParallel::registerDoParallel(cl)
+  on.exit(parallel::stopCluster(cl))  # always cleans up, even on error
+  
+  purrr::map_dfr(names(rf_models), function(topic) {
+    
+    cat("Computing SHAP for", topic, "\n")
+    
+    set.seed(seed)
+    shap_out <- fastshap::explain(
+      object       = rf_models[[topic]],
+      X            = meta_clean,
+      pred_wrapper = pfun,
+      nsim         = nsim,
+      adjust       = TRUE,
+      shap_only    = FALSE,
+      parallel     = TRUE   # <-- now uses the registered cluster
+    )
+    
+    shap_vals    <- as.data.frame(shap_out$shapley_values)
+    feature_vals <- as.data.frame(shap_out$feature_values)
+    
+    purrr::map_dfr(colnames(shap_vals), function(env) {
+      ct <- cor.test(feature_vals[[env]], shap_vals[[env]],
+                     method = "spearman", use = "complete.obs")
+      data.frame(
+        Topic    = topic,
+        Env      = env,
+        shap_cor = as.numeric(ct$estimate),
+        p_val    = ct$p.value,
+        mean_abs = mean(abs(shap_vals[[env]]))
+      )
+    })
+  }) %>%
+    group_by(Topic) %>%
+    mutate(
+      p_adj      = p.adjust(p_val, method = "BH"),
+      imp_rank   = rank(-mean_abs),
+      imp_scaled = (mean_abs - min(mean_abs)) / (max(mean_abs) - min(mean_abs)),
+      direction  = case_when(
+        shap_cor >  0.1 ~ "+",
+        shap_cor < -0.1 ~ "-",
+        TRUE            ~ ""
+      )
+    ) %>%
+    ungroup()
+}
+```
+
+```{r}
+# shap_dir_FL <- run_shap_direction(
+#   rf_models  = results_clr_FL$rf_models,
+#   meta_clean = prep_FL$meta_clean,
+#   nsim       = 500
+# )
+
+#save so we don't need to re-run everytime
+#saveRDS(shap_dir_FL, file = "output/objects/FL/shap_dir_FL.rds")
+shap_dir_FL <- readRDS("output/objects/FL/shap_dir_FL.rds")
+
+shap_dir_FL
+```
+
+
+```{r}
+library(ggnewscale)
+```
+```{r}
+plot_importance_direction_dot <- function(shap_dir, rf_perf,
+                                          top_n = 5,
+                                          p_cut = 1,
+                                          h_line = 12.5,
+                                          param_order,
+                                          title = "SHAP Importance + Direction") {
+  
+  if (missing(param_order)) stop("param_order is required")
+  
+  topic_order <- unique(shap_dir$Topic)
+  all_envs    <- param_order
+  
+  # ── identify top N env vars per topic by mean_abs SHAP ────────────────────
+  top_vars <- shap_dir %>%
+    group_by(Topic) %>%
+    arrange(desc(mean_abs)) %>%
+    slice(1:top_n) %>%
+    ungroup() %>%
+    select(Topic, Env) %>%
+    mutate(is_top = TRUE)
+  
+  # ── build full grid ────────────────────────────────────────────────────────
+  full_grid <- expand.grid(
+    Topic = topic_order,
+    Env   = all_envs,
+    stringsAsFactors = FALSE
+  )
+  
+  # ── join SHAP data + top_n flag onto full grid ─────────────────────────────
+  plot_df <- full_grid %>%
+    left_join(
+      shap_dir %>% select(Topic, Env, imp_scaled, shap_cor, p_adj, mean_abs),
+      by = c("Topic", "Env")
+    ) %>%
+    left_join(top_vars, by = c("Topic", "Env")) %>%
+    mutate(
+      # only show dot if in top_n AND significant
+      imp_plot = ifelse(is.na(is_top) | p_adj >= p_cut, NA, imp_scaled),
+      cor_plot = ifelse(is.na(is_top) | p_adj >= p_cut, NA, shap_cor),
+      is_r2    = FALSE
+    )
+  
+  # ── build RF R² row ────────────────────────────────────────────────────────
+  r2_vals <- if ("RF_R2" %in% colnames(rf_perf)) {
+    as.numeric(rf_perf$RF_R2)
+  } else {
+    as.numeric(rf_perf$R2)
+  }
+  
+  r2_row <- data.frame(
+    Topic    = rf_perf$Topic,
+    Env      = "RF R²",
+    imp_plot = r2_vals,
+    cor_plot = NA,
+    is_r2    = TRUE
+  )
+  
+  # ── combine ────────────────────────────────────────────────────────────────
+  combined_df <- bind_rows(plot_df, r2_row) %>%
+    mutate(
+      Env   = factor(Env,   levels = c("RF R²", all_envs)),
+      Topic = factor(Topic, levels = topic_order)
+    )
+  
+  imp_df_plot <- combined_df %>% filter(!is_r2)
+  r2_df_plot  <- combined_df %>% filter(is_r2)
+  
+  ggplot() +
+    # ── background tiles ──────────────────────────────────────────────────
+    geom_tile(data  = imp_df_plot,
+              aes(x = Topic, y = Env),
+              fill  = "white", color = "grey90") +
+    
+    # ── dots: size = importance, color = shap_cor ─────────────────────────
+    geom_point(data = imp_df_plot %>% filter(!is.na(imp_plot)),
+               aes(x     = Topic, y    = Env,
+                   size  = imp_plot,
+                   color = cor_plot)) +
+    scale_color_gradient2(
+      low      = "#2C7BB6",
+      mid      = "white",
+      high     = "#D7191C",
+      midpoint = 0,
+      name     = "Spearman ρ\n(feature × SHAP)",
+      limits   = c(-1, 1)
+    ) +
+    scale_size_continuous(
+      name   = "Scaled SHAP\nimportance",
+      range  = c(2, 8),
+      limits = c(0, 1)
+    ) +
+    
+    # ── R² row ────────────────────────────────────────────────────────────
+    new_scale_fill() +
+    geom_tile(data  = r2_df_plot,
+              aes(x = Topic, y = Env, fill = imp_plot),
+              color = "white") +
+    scale_fill_gradient(low    = "#EFF3FF", high   = "darkgreen",
+                        name   = "RF OOB R²",
+                        limits = c(0, 1)) +
+    geom_text(data = r2_df_plot,
+              aes(x = Topic, y = Env,
+                  label = round(imp_plot, 2)),
+              size = 4, color = "black") +
+    
+    geom_hline(yintercept = h_line, color = "black", linewidth = 0.8) +
+    
+    labs(
+      x        = "Subcommunity",
+      y        = "",
+      title    = title,
+      #subtitle = paste0("Top ", top_n, " drivers per topic")
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid   = element_blank(),
+      axis.line    = element_line(colour = "black"),
+      plot.title   = element_text(face = "bold", size = 12),
+      legend.box   = "vertical"
+    ) +
+    guides(fill = "none")
+}
+
+# get the new names in the same order as param_order
+new_order <- meta_names$new[match(param_order, meta_names$original)]
+
+shap_dir_FL2<- shap_dir_FL %>%
+  left_join(meta_names, by = c("Env" = "original")) %>%
+  mutate(Env= coalesce(new, Env)) %>% 
+  mutate(Env = factor(Env, levels = new_order))
+
+FL_rfshap<-plot_importance_direction_dot(
+  shap_dir    = shap_dir_FL2,
+  rf_perf     = results_clr_FL$rf_perf,
+  top_n       = 15,
+  param_order = new_order,
+  title       = expression(bold("D") * " RM + SHAP"), 
+)
+
+ggsave("../output/plots/FL/FL_RFshap.png", FL_rfshap, width = 8, height = 6, units = "in",dpi=600)
+
+FL_rfshap
+```
+Direction was summarized as the Spearman correlation between each environmental variable and its SHapley Additive exPlanation (SHAP) value, where positive values indicate the variable drives topic abundance upward.
+
+#Summary plot
+```{r}
+FL_limma_crl_tight <- FL_limma_crl + theme(plot.margin = margin(0, -2, 0, 0))
+FL_rfshap_tight    <- FL_rfshap    + theme(plot.margin = margin(0, 0, 0, -2))
+bottom_right <- plot_grid(FL_limma_crl_tight, FL_rfshap_tight, ncol = 2,rel_widths = c(.8, 1.2))
+
+
+right_col <- plot_grid(FL_meta_plt, bottom_right, nrow = 2,rel_heights = c(.8, 1.3))
+
+#grab ht_FL as a grob if it's a ComplexHeatmap
+ht_grob <- grid::grid.grabExpr(ComplexHeatmap::draw(ht_FL))
+FL_summary <- plot_grid(ht_grob, right_col, 
+                        ncol = 2,
+                        align = "h",
+                        axis = "tb",
+                        rel_widths = c(1, 1.3))
+
+ggsave("output/plots/FL/FL_summary.pdf", FL_summary, width = 18, height = 8, units = "in",dpi=600)
+FL_summary
+```
+
+
+#____________
+#**PA**
+#2. Prep data 
+```{r}
+#this inlcudes counts, tax_dict, meta
+PA_results<-process_phyloseq(PA_data)
+
+#save the counts tables you will need for perplexity
+write.csv(PA_results$counts, "output/tables/runPA/PA_counts.csv")
+
+#free up some memoery we don't need the FL_data anymore and we can call it in if we do 
+rm(PA_data)
+gc()  
+
+```
+
+#3. Run LDA
+### run LDA models 
+```{r run-lda-models}
+lda_varying_params_lists_PA <-  list()
+for (k in 1:20) {lda_varying_params_lists_PA[[paste0("k",k)]] <- list(k = k)}
+
+lda_models_PA  <- 
+  run_lda_models(
+    data = PA_results$counts,
+    lda_varying_params_lists = lda_varying_params_lists_PA,
+    lda_fixed_params_list = list(method = "VEM"),
+    dir = "../output/saved_models/runsPA/",
+    reset = FALSE,
+    verbose = TRUE
+  )
+
+```
+
+### align the topics based on different methods
+```{r align-topics}
+
+aligned_topics_product_PA <- 
+  align_topics(
+    models = lda_models_PA,
+    method = "product") 
+
+compute_number_of_paths(aligned_topics_product_PA) %>% 
+  plot_number_of_paths() + 
+  ggtitle("Method: product")
+
+aligned_topics_transport_PA <- 
+  align_topics(
+    models = lda_models_PA,
+    method = "transport") 
+
+compute_number_of_paths(aligned_topics_transport_PA) %>% 
+  plot_number_of_paths() + 
+  ggtitle("Method: transport")
+
+```
+
+### top taxa alingment
+```{r}
+aligned_topics_transport_k <- 
+  align_topics(
+    models = lda_models_PA[c(1,10)],
+    method = "transport") 
+
+p<-plot(aligned_topics_transport_k,
+     add_leaves = TRUE, 
+     label_topics = TRUE,
+     n_features_in_leaves = 2,
+     min_feature_prop = 0.01,
+     leaves_text_size = 8,
+     color_by="topic",
+      model_name_repair_fun = function(x) str_remove_all(x, "k"))+
+     theme_bw()+
+    labs(x="")
+
+#ggsave(p, filename = "PA_k10.png", height = 5, width = 9, units = "cm", scale = 1.5)
+
+p
+```
+
+### perplexity (for diagnostics)
+```{r}
+PA_perplexity = read.csv("perplexity/PA_perplexity.csv",header=TRUE)
+
+p<-ggplot(PA_perplexity, aes(x = k, y = perplexity)) +
+   geom_point() +
+   geom_smooth(se = FALSE) +
+   theme_bw()+
+   labs(x = "Candidate number of topics", y = "Perplexity score")
+
+p
+```
+
+##diagnostics figure
+```{r}
+figure <- make_figure2(aligned_topics_product = aligned_topics_product_PA, 
+                           aligned_topics_transport = aligned_topics_transport_PA,
+                       perplexity_df=PA_perplexity,size_fraction="Particle-Associated Prokaryotes")
+
+
+ggsave(figure, filename = "output/plots/PA/diagnostics.png", height = 14, width = 21, units = "cm", scale = 1.5)
+
+figure
+
+```
+
+### W and A
+```{r}
+W_PA = as.data.frame(lda_models_PA$k10$gamma)
+colnames(W_PA)<- sub("V", "", colnames(W_PA))
+W_PA
+```
+
+```{r}
+A_PA <-as.data.frame(exp(lda_models_PA$k10$beta))
+A_df_PA<-A_PA ## to work on rare
+A_PA <- A_PA %>% mutate(topic = row_number())
+
+#change the ASV names 
+A_long_PA<- melt.data.frame(A_PA, id.vars = "topic",variable_name="ASV")
+A_long_PA$Phyla<-sapply(strsplit(as.character(A_long_PA$ASV)," "), "[", 1)
+A_long_PA$Order<-paste(sapply(strsplit(as.character(A_long_PA$ASV)," "), "[", 2),
+                    sapply(strsplit(as.character(A_long_PA$ASV)," "), "[", 3),sep="_")
+A_long_PA$Order_raw<-paste(sapply(strsplit(as.character(A_long_PA$Order),"_"), "[", 1))
+
+#A_long_PA<- A_long_PA
+#save(A_long_PA,file="../output/tables/w_matrix/pa_tax")
+
+
+A_long_PA <- A_long_PA %>% mutate(asv_type=case_when(value >= 0.1 ~ ">=10%", value < 0.1 ~ "<10%"))
+A_long_PA
+```
+
+
+#4.Run GoMDE
+```{r}
+#res_PA  <- run_gomde_markers(PA_results$counts, PA_results$tax_dict,W_PA,A_long_PA,  top_n = 25)
+
+#save so you don't have to re-computer
+saveRDS(res_PA,"output/objects/PA/res_PA.rds")
+res_PA<-readRDS("output/objects/PA/res_PA.rds")
+
+res_PA
+```
+
+### overview
+```{r}
+#grab data from full set not top25 -- but still only SPECIALIST
+mat_df <- res_PA$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>% #sig enrichment 
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%      # specialists only
+  ungroup() %>%
+  left_join(PA_results$tax_dict, by = c("ASV" = "ASV_name")) %>%
+  filter(!is.na(Order)) %>%
+  filter(!Order %in% c("Incertae Sedis", "unclass_Bacteria")) %>%
+  mutate(Phylum_clean = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other")) %>%
+  group_by(topic, Phylum, Phylum_clean, Order) %>%
+  dplyr::summarise(n_asv = n(), .groups = "drop")
+
+
+mat_df
+
+## collapse orders we only see in 1 topic
+min_asv <- 5  # orders with max < 3 across all topics become Other [Phylum]
+
+# build matrix
+# build full matrix first to know which orders are sparse
+mat_full <- mat_df %>%
+  group_by(Order, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order") %>%
+  as.matrix()
+
+# identify sparse orders
+sparse_orders <- rownames(mat_full)[apply(mat_full, 1, max) < min_asv]
+
+# collapse in mat_df
+mat_df_collapsed <- mat_df %>%
+  mutate(Order_plot = ifelse(Order %in% sparse_orders,
+                           ifelse(Phylum_clean == "Other", 
+                                  "Other (rare phyla)",  # catch the Other Other case this is when we made phyla other
+                                  paste0("Multiple ", Phylum_clean)),
+                           Order)) %>% 
+  group_by(topic, Phylum_clean, Order_plot) %>%
+  dplyr::summarise(n_asv = sum(n_asv), .groups = "drop")
+
+# rebuild matrix
+mat <- mat_df_collapsed %>%
+  group_by(Order_plot, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order_plot") %>%
+  as.matrix()
+
+mat <- mat[, order(as.numeric(colnames(mat)))]
+colnames(mat) <- paste0("PA_", colnames(mat))
+mat <- mat[rowSums(mat) > 0, ]
+
+# phylum annotation vector
+# phylum lookup including Other [Phylum] rows
+order_phylum <- mat_df_collapsed %>%
+  distinct(Order_plot, Phylum_clean) %>%
+  filter(Order_plot %in% rownames(mat))
+
+phylum_vec <- setNames(order_phylum$Phylum_clean, order_phylum$Order_plot)
+phylum_vec <- phylum_vec[rownames(mat)]
+
+# lighten phylum colors for Other rows
+lighten <- function(hex, factor = 0.5) {
+  rgb <- col2rgb(hex)
+  rgb_light <- rgb + (255 - rgb) * factor
+  rgb(rgb_light[1,], rgb_light[2,], rgb_light[3,], maxColorValue = 255)
+}
+
+# build annotation colors - named orders get full color, Other gets lightened
+row_colors <- sapply(rownames(mat), function(ord) {
+  phylum <- phylum_vec[ord]
+  base_col <- phyla_colors_clean[phylum]
+  if (grepl("^Multiple ", ord)) lighten(base_col, 0.5) else base_col
+})
+
+# for ComplexHeatmap we need the annotation to use the phylum color vector
+# but mark Other rows differently with a border or pattern - simplest is
+# just to show them as a named color per row
+row_annot <- rowAnnotation(
+  Phylum = phylum_vec,
+  col = list(Phylum = phyla_colors_clean),
+  show_annotation_name = FALSE,
+  annotation_legend_param = list(Phylum = list(ncol = 1)),
+  show_legend = TRUE  
+)
+
+
+# color scale
+col_fun <- colorRamp2(c(0, max(mat)), c("white", "#2C7FB8"))
+
+row_title <- rowAnnotation(
+  label = anno_text("Order", 
+                    rot = 90, 
+                    just = "center",
+                    gp = gpar(fontsize = 10, fontface = "bold")),
+  width = unit(0.8, "cm")
+)
+
+row_name_cols <- ifelse(grepl("^Multiple", rownames(mat)), "grey50", "black")
+row_name_fontface <- ifelse(grepl("^Multiple ", rownames(mat)), "italic", "plain")
+
+ht_PA <- Heatmap(mat,
+  name = "ASV count",
+  col = col_fun,
+  left_annotation = row_annot,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  show_row_dend = TRUE,
+  show_heatmap_legend = FALSE,
+  row_names_gp = gpar(fontsize = 8,
+                      col = row_name_cols,
+                      fontface = row_name_fontface),
+  column_names_gp = gpar(fontsize = 10),
+  column_title = expression(bold("A") * " Fingerprint Taxa"),
+  column_title_gp = gpar(fontsize = 12, fontface = "bold"),
+  rect_gp = gpar(col = "grey90", lwd = 0.5),
+  width = unit(10, "cm"),
+  row_names_max_width = max_text_width(rownames(mat), gp = gpar(fontsize = 8)),
+  layer_fun = function(j, i, x, y, width, height, fill) {
+    v <- pindex(mat, i, j)
+    grid.text(ifelse(v > 0, as.character(v), ""), x, y,
+              gp = gpar(fontsize = 7, col = "grey20"))
+  },
+  row_title = "Order",
+  row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  row_title_side = "right"
+) 
+  
+ht_PA
+
+```
+
+### top markers summary
+```{r}
+df_swarm <- res_PA$top_markers %>%
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%        # pecialists only
+  ungroup() %>%
+  mutate(
+    topic  = factor(topic),
+    Phylum = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other"),
+    Phylum = factor(Phylum, levels = names(phyla_colors))
+  )
+
+# pie composition per topic
+pie_df <- df_swarm %>%
+  count(topic, Phylum, name = "n") %>%
+  group_by(topic) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>%
+  select(topic, Phylum, prop) %>%
+  pivot_wider(names_from = Phylum, values_from = prop, values_fill = 0)
+
+# CONTROL PIE LOCATION (global annotation band)
+topic_levels <- levels(df_swarm$topic)
+pie_df <- pie_df %>%
+  mutate(x = as.numeric(factor(topic, levels = topic_levels)))
+
+y_max <- max(df_swarm$log2FC, na.rm = TRUE)
+pie_df$y <- y_max + 1.5   # <-- you can set this to whatever you want
+
+pie_cols <- intersect(names(pie_df), names(phyla_colors))
+
+## topic levels
+topic_levels <- df_swarm %>%
+  distinct(topic) %>%
+  arrange(as.numeric(sub(".*_", "", topic))) %>%
+  pull(topic)
+
+df_swarm$topic <- factor(df_swarm$topic, levels = topic_levels)
+pie_df$topic  <- factor(pie_df$topic,  levels = topic_levels)
+pie_df$x <- as.numeric(pie_df$topic)
+
+
+p_swarm_pie_pa <- ggplot(df_swarm, aes(x = topic, y = log2FC, color = Phylum)) + #size = log2FC
+  geom_quasirandom(width = 0.3, alpha = .8,stroke = 0.9 ) +
+  scatterpie::geom_scatterpie(
+    data = pie_df,
+    aes(x = x, y = y),
+    cols = pie_cols,
+    pie_scale = 3,
+    color = "white",
+    linewidth = 0.3) +
+  scale_color_manual(values = phyla_colors) +
+  scale_fill_manual(values = phyla_colors) +
+  guides(fill = "none", color = guide_legend(ncol = 4,byrow = TRUE)) + #size = guide_legend(ncol = 1)
+  #guides(fill = "none")+
+  theme_bw() +
+  labs(x = "Topic", y = "GoM-DE log2FC - Top25 Specialists", color = "Phylum")+ #size = "log2FC"
+  coord_fixed(ratio = 0.6, ylim = c(0, y_max + 2))+
+  theme(
+    panel.grid.major.x = element_blank(),
+    legend.title = element_text(angle = 90),
+    legend.spacing.x = unit(0.1, "mm"),
+    legend.spacing.y = unit(0.1, "mm"),
+     legend.key.size = unit(1, "mm"),
+    legend.position = "bottom",
+    legend.direction = "horizontal")
+
+p_swarm_pie_pa
+```
+```{r}
+asv_topic_sig_pa <- res_PA$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>%            # enriched only
+  left_join(distinct(PA_results$tax_dict, ASV_name, Phylum),
+            by = c("ASV" = "ASV_name")) %>%
+  mutate(
+    Phylum = ifelse(Phylum %in% names(phyla_colors), Phylum, "Other"),
+    Phylum = factor(Phylum, levels = names(phyla_colors))
+  ) %>%
+  group_by(ASV) %>%
+  summarise(
+    Phylum = dplyr::first(Phylum),
+    n_topics = n_distinct(topic),
+    max_log2FC = max(log2FC),
+    .groups = "drop"
+  )
+
+df_hm_pa <- asv_topic_sig_pa %>%
+  count(Phylum, n_topics)
+print(sum(df_hm_pa$n))
+
+pheat_pa<-ggplot(df_hm_pa, aes(x = factor(n_topics), y = Phylum, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(
+    low = "#f2e5ff",
+    high = "#5b2a86"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank()
+  ) +
+  labs(
+    x = "Number of topics where ASV is significantly enriched",
+    y = "Phylum",
+    fill = "ASV count",
+     title = paste0(
+      "Distribution of marker ASVs \n (n=",
+      nrow(asv_topic_sig_pa),
+      ")"
+     )
+  )
+pheat_pa
+```
+```{r}
+figure <-  ggpubr::ggarrange(pheat_pa,p_swarm_pie_pa, ncol = 2, nrow = 1,widths = c(.4,.6))
+
+figure<-annotate_figure(figure,
+                top = text_grob("Particle-Associated Prokaryotes", color = "black", face = "bold", size = 14))
+
+ggsave(file="output/plots/PA/gomde_PA_pie.pdf", figure, width = 12, height = 8, units = "in",dpi=600)
+
+figure
+```
+
+
+
+#5.Run Env Analysis
+
+### topic proportion across samples
+```{r}
+## cluster by similarity
+w_den<-as.dendrogram(as.hclust(agnes(W_PA, diss=F, method =  "ward")),hang=.5)
+
+#data based on the clustering above 
+W_PA2<-W_PA
+W_PA2$Sample_num<-row.names(W_PA2)
+W_long_PA<- melt.data.frame( W_PA2, id.vars="Sample_num", variable_name="topic")
+
+plota_PA<-W_long_PA %>%
+      ggplot(aes(x=factor(Sample_num,level=labels(w_den)), value, fill=topic))+
+      geom_col(color=NA,width=1,linewidth=0)+
+      scale_fill_brewer(palette="Paired")+
+      labs(y="Subcommunity Proportion",
+           x=paste0("Samples (n=", dim(W_PA2)[1],")"),fill="SC#",
+           title=expression(bold("B") * " PA Prokaryotes"))+
+      theme_bw()+
+    scale_x_discrete(labels = NULL, breaks = NULL) + 
+    scale_y_continuous(breaks = seq(0, 1, 0.1),expand = c(0, 0))+
+      theme(axis.title.y = element_text(size = 10),
+             plot.title = element_text(face = "bold", size = 12),
+          axis.text.y = element_text(size = 10),
+          legend.key.height= unit(.05, 'in'),
+        legend.key.width= unit(.05, 'in'),
+        legend.box.spacing = unit(0.01, "pt"))
+
+plota_PA
+
+ggsave("output/plots/PA/PA_structure.pdf", plota_PA, width = 7, height = 2.5, units = "in",dpi=600)
+
+```
+
+```{r}
+PA_meta<-data.frame(PA_results$meta, check.names = FALSE)
+
+#PLOTS B-D: legend bars
+#get sample infor from main clean table
+sample_info<-PA_meta[,c('Sample_num','new_depths_mdh2','CTD_TEMP','SEASON','YEAR','lake')]
+#drop duplicates - because each OTU gets a value so we have many reps 
+colnames(sample_info)<-c('sample_id','depth','CTD_TEMP','SEASON','YEAR','lake')
+#reorder to match the order of the bar plots 
+sample_info<-sample_info %>% arrange(sample_id,levels=labels(w_den))
+sample_info$sample_id<- factor(sample_info$sample_id,level=labels(w_den))
+
+###make the bar plots 
+lake<-ggplot(data=sample_info, aes(x=sample_id, fill=lake)) + 
+  scale_fill_manual(values=lake_colors)+
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+season<-ggplot(data=sample_info, aes(x=sample_id, fill=SEASON)) + 
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=season_colors)+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+TEMP<-ggplot(data=sample_info, aes(x=sample_id, fill=CTD_TEMP)) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_gradient(low = "blue", high = "red")+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+  
+YEAR<-ggplot(data=sample_info, aes(x=sample_id, fill=factor(YEAR))) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=year_colors)+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+depth<-ggplot(data=sample_info, aes(x=sample_id, fill=depth)) + 
+  scale_fill_manual(values=depth_colors_w)+
+  geom_bar(width = 1,size=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+wx1=0.072
+wx2=0.73
+
+### value definitions
+names_depth=c("spr:","I","E","T","H","smr:","E","D","T","H")
+
+colors_depth= c(season_colors["Spring"],depth_colors_w["Iso_Top"], depth_colors_w["InvS_EPI"],
+          depth_colors_w["InvS_TRM"], depth_colors_w["InvS_HYP"], season_colors["Summer"],
+          depth_colors_w["Strat_EPI"],depth_colors_w["Strat_DCL"],depth_colors_w["Strat_TRM"],
+          depth_colors_w["Strat_HYP"])
+
+#change dynamically
+label_start   <- wx1 + wx2 + 0.01
+label_spacing <- 0.03
+
+season_locx <- label_start + c(0, 2)                            * label_spacing  # 2 labels
+lake_locx   <- label_start + c(0, 1, 2, 3, 4)                  * label_spacing  # 5 labels
+strata_locx <- label_start + c(0, 0.03, 0.04, 0.05, 0.06, 0.09, 0.12, 0.13, 0.14, 0.15)
+year_locx <- label_start + c(0, 0.02, 0.035, 0.05, 0.065, 0.08, 0.095, 0.11, 0.125) #8 labels
+temp_locx   <- label_start + c(0, 1, 2)                        * label_spacing  # 3 labels
+
+
+#gather all the plots
+PA_structure<- ggdraw()+ theme_void()+
+ draw_plot(plota_PA,x = 0, y = 0.25, width = 0.878, height = 0.75)+
+ draw_plot(season,x = wx1, y= 0.2, width = wx2, height = 0.05)+
+  draw_plot(lake,x = wx1, y=0.15, width = wx2, height = 0.05)+
+  draw_plot(depth,x = wx1, y = 0.1, width =wx2, height = 0.05)+
+  draw_plot(YEAR,x = wx1, y = 0.05, width =wx2, height = 0.05)+
+  draw_plot(TEMP,x = wx1, y = 0, width =wx2, height = 0.05)+
+  draw_plot_label(x = c(0.01,0.01,0.01,0.01,0.01), y = c(0.25,0.2,0.15,0.1,0.05), 
+                     label =  c("Season","Lake","Depth","Year","Temp"),
+                     hjust = 0, size = 7)+
+  draw_plot_label(x=c(season_locx,lake_locx, strata_locx, year_locx, temp_locx), #temp
+                  y=c(rep(0.25,2), #season x 2
+                      rep(0.2,5), #lake x5
+                      rep(0.15,10), #depth x 10
+                      rep(0.1,9), #year x 9
+                      rep(0.05,3)), #temp x3
+                  label=c('Spring','Summer',
+                          "SU","MI","HU","ER","ON",
+                          names_depth,
+                          "201","2","3","4","5","6","7","8","9",
+                          'Low','High', 'NA'), 
+                  color=c(season_colors["Spring"], season_colors["Summer"],
+                          "#92809E", "#8cabea", "#64baaa","#FFC86A","#ee7061",
+                          colors_depth,
+                          "gray",'red','#A6CEE3','#B2DF8A',"brown","violet","purple","blue","black",
+                          "blue","red","gray"),
+                  hjust = 0, size = 6 )
+
+
+  
+  
+ggsave("output/plots/PA/PA_sample_membership.pdf", PA_structure, width = 7, height = 3, units = "in",dpi=600)
+  
+PA_structure
+```
+
+
+
+
+### topic location
+```{r}
+#meta long
+PA_meta_long<- melt.data.frame(subset(PA_meta,strat_status != "missing_data"), id.vars="Sample_num", variable_name="variable")
+W_long_meta_PA<-full_join(PA_meta_long, W_long_PA, by = "Sample_num")
+
+p_season<-subset(W_long_meta_PA,(variable == "SEASON") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(season_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=season_colors)+
+      theme_bw()+
+      labs(fill="Season",title="",y="Relative contribution",x= "Subcommunity")
+
+p_season
+
+p_lake<-subset(W_long_meta_PA,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      theme_bw()+
+      labs(fill="Lake",title="",y="",x= "")
+p_lake
+
+p_layer<-subset(W_long_meta_PA,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      theme_classic()+
+      labs(fill="Layer",title="",y="",x= "")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+
+
+p_layer
+
+p_year<-subset(W_long_meta_PA,(variable == "YEAR") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(year_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=year_colors)+
+      theme_bw()+
+      labs(fill="Year",title="",y="",x= "")
+
+p_year
+
+p_status<-subset(W_long_meta_PA,(variable == "strat_status2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill= value.x))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=strat_colors)+
+      labs(x="",y="", fill="Strat. Type")+
+      theme_bw()
+
+p_status
+
+#sample prop - how much does this sc represent overall 
+hold<-subset(W_long_meta_PA, variable == "YEAR")  #can be any variable 
+prop<-hold %>% group_by(topic) %>% dplyr::summarise(prop=round((sum(value.y)/sum(hold$value.y))*100))
+
+p_dist<-ggplot(prop, aes(x=topic, y=prop, fill=topic)) +
+  geom_col() +
+  geom_text(aes(label=paste0(round(prop, 1), "%")), 
+            vjust=-0.5, 
+            size=3, 
+            fontface="bold") +  
+  scale_fill_brewer(palette="Paired") +
+  labs(x="", y="% of all sample distribution") +
+  theme_classic() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))+
+  theme(legend.position="none", 
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank(),
+        theme(axis.title=element_text(size=8, face="bold")))
+
+
+figure = ggpubr::ggarrange(p_season, p_status, p_layer, p_lake, p_year,p_dist, ncol = 3, nrow = 2)
+
+figure<-ggpubr::annotate_figure(figure, 
+                        top = ggpubr::text_grob("PA PROK: Topic Distribution across samples", color = "black", 
+                                        face = "bold", size = 12))
+
+ggsave("output/plots/PA/PA_membership.pdf", figure, width = 9, height = 5, units = "in",dpi=600)
+
+figure
+
+```
+
+
+```{r}
+
+p_lake<-subset(W_long_meta_PA,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Lake",title=expression(bold("B") * " Meta Overview"), 
+           y="Relative contribution",x= "Subcommunity")
+p_lake
+
+p_layer<-subset(W_long_meta_PA,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Layer",title="",y="Relative contribution",x= "Subcommunity")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+PA_meta_plt<- ggpubr::ggarrange(p_lake, p_layer, ncol = 2, nrow = 1)
+PA_meta_plt
+```
+
+##prep meta
+```{r}
+prep_PA   <- prep_topic_meta(W_PA, PA_meta)
+```
+
+## Limma
+```{r}
+limma_res_PA_clr <- run_topic_clr_limma(prep_PA$W_clean, prep_PA$meta_clean)
+sig_limma_clr_PA  <- limma_res_PA_clr$res_df  %>% filter(adj_p_value_by_term < 0.05)
+sig_limma_clr_PA 
+```
+```{r}
+PA_limma_crl <- plot_limma(
+  sig_limma_clr_PA ,
+  topic_order = colnames(prep_PA$W_clean),
+  title       = expression(bold("C") * " Limma") ,
+  meta_names  = meta_names,
+  param_order = param_order
+)
+
+PA_limma_crl
+```
+
+
+## RM + SHAP
+```{r}
+results_clr_PA <- run_rf_oob_clr(prep_PA$W_clean, prep_PA$meta_clean)
+results_clr_PA
+```
+```{r}
+#shap_dir_PA <- run_shap_direction(
+#  rf_models  = results_clr_PA$rf_models,
+#  meta_clean = prep_PA$meta_clean,
+#  nsim       = 500
+#)
+
+#save so we don't need to re-run everytime
+saveRDS(shap_dir_PA, file = "output/objects/PA/shap_dir_PA.rds")
+shap_dir_PA <- readRDS("output/objects/PA/shap_dir_PA.rds")
+
+shap_dir_PA
+```
+
+```{r}
+# get the new names in the same order as param_order
+new_order <- meta_names$new[match(param_order, meta_names$original)]
+
+shap_dir_PA2<- shap_dir_PA %>%
+  left_join(meta_names, by = c("Env" = "original")) %>%
+  mutate(Env= coalesce(new, Env)) %>% 
+  mutate(Env = factor(Env, levels = new_order))
+
+PA_rfshap<-plot_importance_direction_dot(
+  shap_dir    = shap_dir_PA2,
+  rf_perf     = results_clr_PA$rf_perf,
+  top_n       = 15,
+  param_order = new_order,
+  title       = expression(bold("D") * " RM + SHAP")
+)
+
+#ggsave("../output/plots/FL/FL_RFshap.png", p, width = 8, height = 6, units = "in",dpi=600)
+
+PA_rfshap
+```
+
+#Summary plot
+```{r}
+PA_limma_crl_tight <- PA_limma_crl + theme(plot.margin = margin(0, -2, 0, 0))
+PA_rfshap_tight    <- PA_rfshap    + theme(plot.margin = margin(0, 0, 0, -2))
+bottom_right <- plot_grid(PA_limma_crl_tight, PA_rfshap_tight, ncol = 2,rel_widths = c(.8, 1.2))
+
+
+right_col <- plot_grid(PA_meta_plt, bottom_right, nrow = 2,rel_heights = c(.8, 1.3))
+
+#grab ht_PA as a grob if it's a ComplexHeatmap
+ht_grob <- grid::grid.grabExpr(ComplexHeatmap::draw(ht_PA))
+PA_summary <- plot_grid(ht_grob, right_col, 
+                        ncol = 2,
+                        align = "h",
+                        axis = "tb",
+                        rel_widths = c(1, 1.3))
+
+ggsave("output/plots/PA/PA_summary.pdf", PA_summary, width = 18, height = 8, units = "in",dpi=600)
+PA_summary
+```
+
+#____________
+#### colors
+```{r}
+#colors
+library(RColorBrewer)
+
+# Get the 9-color Paired palette
+paired_colors <- brewer.pal(8, "Paired")
+
+# Create SSF colors
+SSF_colors <- paired_colors
+names(SSF_colors) <- paste0("SSF_", seq_along(SSF_colors))
+
+# Create LSF colors 
+my_palette <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", 
+                "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", 
+                "#fdae61")
+
+
+LSF_colors <- my_palette 
+names(LSF_colors) <- paste0("LSF_", seq_along(LSF_colors))
+
+# Combine into one named vector
+chl_scs <- c(SSF_colors, LSF_colors)
+
+chl_scs
+
+```
+
+#**SSF**
+
+```{r}
+## same processing as the proks but we need to change the taxonomy labels 
+process_phyloseq_EUK <- function(ps) {
+  library(phyloseq)
+  
+  # Extract the three tables
+  if (taxa_are_rows(ps)) {
+    asv <- as.data.frame(t(otu_table(ps)))
+  } else {
+    asv <- as.data.frame(otu_table(ps))
+  }
+  
+  tax  <- as.data.frame(tax_table(ps))
+  meta <- as.data.frame(sample_data(ps))
+  
+  # Hand off to process_tables so we can clean if needed 
+  return(process_tables_EUK(asv, tax, meta))
+}
+
+process_tables_EUK <- function(asv, tax, meta) {
+  library(dplyr)
+  
+  tax$ASV <- rownames(tax)
+  
+  #we need asvs to be unique so we add a numer
+  tax_dict <- tax %>%
+    mutate(
+      ASV_name = paste0(
+        ifelse(is.na(Class), "[unknown Class]", Class),
+        " (",
+        ifelse(is.na(Order), "?", Order),
+        ") ",
+        row_number()
+      )
+    ) %>%
+    ungroup()
+  
+  tax_dict$ASV <- factor(tax_dict$ASV, levels = colnames(asv))
+  tax_dict <- tax_dict[order(tax_dict$ASV), ]
+  
+  colnames(asv) <- tax_dict$ASV_name
+  asv <- as.data.frame(asv) %>% mutate(across(everything(), as.integer))
+  
+  return(list(
+    counts   = as.data.frame(asv),
+    tax_dict = tax_dict,
+    meta     = meta
+  ))
+}
+```
+
+
+#2. Prep Data
+```{r}
+#this inlcudes counts, tax_dict, meta
+SSF_results<-process_phyloseq_EUK(SSF_data)
+
+#save the counts tables you will need for perplexity
+write.csv(SSF_results$counts, "output/tables/runSSF/SSF_counts.csv")
+
+#free up some memoery we don't need the FL_data anymore and we can call it in if we do 
+rm(SSF_data)
+gc()  
+
+```
+
+#3. Run LDA
+### run LDA models 
+```{r run-lda-models}
+lda_varying_params_lists_SSF <-  list()
+for (k in 1:20) {lda_varying_params_lists_SSF[[paste0("k",k)]] <- list(k = k)}
+
+lda_models_SSF  <- 
+  run_lda_models(
+    data = SSF_results$counts,
+    lda_varying_params_lists = lda_varying_params_lists_SSF,
+    lda_fixed_params_list = list(method = "VEM"),
+    dir = "../output/saved_models/runsSSF/",
+    reset = FALSE,
+    verbose = TRUE
+  )
+
+```
+
+### align the topics based on different methods
+```{r align-topics}
+
+aligned_topics_product_SSF <- 
+  align_topics(
+    models = lda_models_SSF,
+    method = "product") 
+
+compute_number_of_paths(aligned_topics_product_SSF) %>% 
+  plot_number_of_paths() + 
+  ggtitle("Method: product")
+
+aligned_topics_transport_SSF <- 
+  align_topics(
+    models = lda_models_SSF,
+    method = "transport") 
+
+compute_number_of_paths(aligned_topics_transport_SSF) %>% 
+  plot_number_of_paths() + 
+  ggtitle("Method: transport")
+
+```
+
+### top taxa alingment
+```{r}
+aligned_topics_transport_k <- 
+  align_topics(
+    models = lda_models_SSF[c(1,10)],
+    method = "transport") 
+
+p<-plot(aligned_topics_transport_k,
+     add_leaves = TRUE, 
+     label_topics = TRUE,
+     n_features_in_leaves = 2,
+     min_feature_prop = 0.01,
+     leaves_text_size = 8,
+     color_by="topic",
+      model_name_repair_fun = function(x) str_remove_all(x, "k"))+
+     theme_bw()+
+    labs(x="")
+
+#ggsave(p, filename = "PA_k10.png", height = 5, width = 9, units = "cm", scale = 1.5)
+
+p
+```
+
+### perplexity (for diagnostics)
+```{r}
+SSF_perplexity = read.csv("perplexity/SSF_perplexity.csv",header=TRUE)
+
+p<-ggplot(SSF_perplexity, aes(x = k, y = perplexity)) +
+   geom_point() +
+   geom_smooth(se = FALSE) +
+   theme_bw()+
+   labs(x = "Candidate number of topics", y = "Perplexity score")
+
+p
+```
+
+##diagnostics figure
+```{r}
+figure <- make_figure2(aligned_topics_product = aligned_topics_product_SSF, 
+                           aligned_topics_transport = aligned_topics_transport_SSF,
+                       perplexity_df=SSF_perplexity,size_fraction="Small Chloroplast")
+
+
+ggsave(figure, filename = "output/plots/SSF/diagnostics.png", height = 14, width = 21, units = "cm", scale = 1.5)
+
+figure
+
+```
+
+Panel a: Paths track close to the diagonal at k=9, indicating a well-balanced model
+Panel b: Coherence scores are mostly strong (0.5–0.8) at k=9, before degradation sets in at higher k
+Panel c: Refinement score is near its peak at k=9, before variance becomes unstable
+Panel d: k=9 sits just past the perplexity elbow, capturing most model improvement efficiently
+
+### W and A
+```{r}
+W_SSF = as.data.frame(lda_models_SSF$k9$gamma)
+colnames(W_SSF)<- sub("V", "", colnames(W_SSF))
+W_SSF
+```
+
+```{r}
+A_SSF <-as.data.frame(exp(lda_models_SSF$k9$beta))
+A_df_SSF<-A_SSF ## to work on rare
+A_SSF <- A_SSF %>% mutate(topic = row_number())
+
+#change the ASV names 
+A_long_SSF<- melt.data.frame(A_SSF, id.vars = "topic",variable_name="ASV")
+A_long_SSF$Phyla<-sapply(strsplit(as.character(A_long_SSF$ASV)," "), "[", 1)
+A_long_SSF$Order<-paste(sapply(strsplit(as.character(A_long_SSF$ASV)," "), "[", 2),
+                    sapply(strsplit(as.character(A_long_SSF$ASV)," "), "[", 3),sep="_")
+A_long_SSF$Order_raw<-paste(sapply(strsplit(as.character(A_long_SSF$Order),"_"), "[", 1))
+
+#A_long_SSF<- A_long_SSF
+#save(A_long_SSF,file="../output/tables/w_matrix/pa_tax")
+
+
+A_long_SSF <- A_long_SSF %>% mutate(asv_type=case_when(value >= 0.1 ~ ">=10%", value < 0.1 ~ "<10%"))
+A_long_SSF
+```
+
+#4.Run GoMDE
+```{r}
+res_SSF  <- run_gomde_markers(SSF_results$counts, SSF_results$tax_dict,W_SSF,A_long_SSF,  top_n = 25)
+
+#save so you don't have to re-computer
+saveRDS(res_SSF,"output/objects/SSF/res_SSF.rds")
+res_SSF<-readRDS("output/objects/SSF/res_SSF.rds")
+
+res_SSF
+```
+
+### overview
+```{r}
+#grab data from full set not top25 -- but still only SPECIALIST
+mat_df <- res_SSF$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>% #sig enrichment 
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%      # specialists only
+  ungroup() %>%
+  left_join(SSF_results$tax_dict, by = c("ASV" = "ASV_name")) %>%
+  filter(!is.na(Order)) %>%
+  filter(!Order %in% c("unclass_plas")) %>%
+  mutate(Class_clean = ifelse(Class %in% names(class_colors), Class, "Other")) %>%
+  group_by(topic, Class, Class_clean, Order) %>%
+  dplyr::summarise(n_asv = n(), .groups = "drop")
+
+
+mat_df
+
+## collapse orders we only see in 1 topic
+min_asv <- 5  # orders with max < 3 across all topics become Other [Phylum]
+
+# build matrix
+# build full matrix first to know which orders are sparse
+mat_full <- mat_df %>%
+  group_by(Order, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order") %>%
+  as.matrix()
+
+# identify sparse orders
+sparse_orders <- rownames(mat_full)[apply(mat_full, 1, max) < min_asv]
+
+# collapse in mat_df
+mat_df_collapsed <- mat_df %>%
+  mutate(Order_plot = ifelse(Order %in% sparse_orders,
+                           ifelse(Class_clean == "Other", 
+                                  "Other (rare Class)",  # catch the Other Other case this is when we made phyla other
+                                  paste0("Multiple ", Class_clean)),
+                           Order)) %>% 
+  group_by(topic, Class_clean, Order_plot) %>%
+  dplyr::summarise(n_asv = sum(n_asv), .groups = "drop")
+
+# rebuild matrix
+mat <- mat_df_collapsed %>%
+  group_by(Order_plot, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order_plot") %>%
+  as.matrix()
+
+mat <- mat[, order(as.numeric(colnames(mat)))]
+colnames(mat) <- paste0("SSF_", colnames(mat))
+mat <- mat[rowSums(mat) > 0, ]
+
+
+order_class <- mat_df_collapsed %>%
+  distinct(Order_plot, Class_clean) %>%
+  filter(Order_plot %in% rownames(mat))
+
+class_vec <- setNames(order_class$Class_clean, order_class$Order_plot)
+class_vec <- class_vec[rownames(mat)]
+
+class_colors_clean <- class_colors
+
+# lighten phylum colors for Other rows
+lighten <- function(hex, factor = 0.5) {
+  rgb <- col2rgb(hex)
+  rgb_light <- rgb + (255 - rgb) * factor
+  rgb(rgb_light[1,], rgb_light[2,], rgb_light[3,], maxColorValue = 255)
+}
+
+# build annotation colors - named orders get full color, Other gets lightened
+row_colors <- sapply(rownames(mat), function(ord) {
+  class <- class_vec[ord]
+  base_col <- class_colors_clean[class]
+  if (grepl("^Multiple ", ord)) lighten(base_col, 0.5) else base_col
+})
+
+# for ComplexHeatmap we need the annotation to use the phylum color vector
+# but mark Other rows differently with a border or pattern - simplest is
+# just to show them as a named color per row
+row_annot <- rowAnnotation(
+  Class = class_vec,
+  col = list(Class = class_colors_clean),
+  show_annotation_name = FALSE,
+  annotation_legend_param = list(Class = list(ncol = 1)),
+  show_legend = TRUE  
+)
+
+
+# color scale
+col_fun <- colorRamp2(c(0, max(mat)), c("white", "#2C7FB8"))
+
+row_title <- rowAnnotation(
+  label = anno_text("Order", 
+                    rot = 90, 
+                    just = "center",
+                    gp = gpar(fontsize = 10, fontface = "bold")),
+  width = unit(0.8, "cm")
+)
+
+row_name_cols <- ifelse(grepl("^Multiple", rownames(mat)), "grey50", "black")
+row_name_fontface <- ifelse(grepl("^Multiple ", rownames(mat)), "italic", "plain")
+
+ht_SSF <- Heatmap(mat,
+  name = "ASV count",
+  col = col_fun,
+  left_annotation = row_annot,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  show_row_dend = TRUE,
+  show_heatmap_legend = FALSE,
+  row_names_gp = gpar(fontsize = 8,
+                      col = row_name_cols,
+                      fontface = row_name_fontface),
+  column_names_gp = gpar(fontsize = 10),
+  column_title = expression(bold("A") * " Fingerprint Taxa"),
+  column_title_gp = gpar(fontsize = 12, fontface = "bold"),
+  rect_gp = gpar(col = "grey90", lwd = 0.5),
+  width = unit(10, "cm"),
+  row_names_max_width = max_text_width(rownames(mat), gp = gpar(fontsize = 8)),
+  layer_fun = function(j, i, x, y, width, height, fill) {
+    v <- pindex(mat, i, j)
+    grid.text(ifelse(v > 0, as.character(v), ""), x, y,
+              gp = gpar(fontsize = 7, col = "grey20"))
+  },
+  row_title = "Order",
+  row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  row_title_side = "right"
+) 
+
+ht_SSF
+
+```
+
+
+### top markers summary
+```{r}
+# swarm data FIRST (defines topic order)
+df_swarm <- res_SSF$top_markers %>%
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%        # pecialists only
+  ungroup() %>%
+   mutate(
+    topic  = factor(topic),
+    Class = ifelse(Class %in% names(class_colors), Class, "Other")
+  )
+
+# pie composition per topic
+pie_df <- df_swarm %>%
+  count(topic, Class, name = "n") %>%
+  group_by(topic) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>%
+  select(topic, Class, prop) %>%
+  pivot_wider(names_from = Class, values_from = prop, values_fill = 0)
+
+# CONTROL PIE LOCATION (global annotation band)
+topic_levels <- levels(df_swarm$topic)
+pie_df <- pie_df %>%
+  mutate(x = as.numeric(factor(topic, levels = topic_levels)))
+
+y_max <- max(df_swarm$log2FC, na.rm = TRUE)
+pie_df$y <- y_max + 1.5   # <-- you can set this to whatever you want
+
+pie_cols <- intersect(names(pie_df), names(class_colors))
+
+## topic levels
+topic_levels <- df_swarm %>%
+  distinct(topic) %>%
+  arrange(as.numeric(sub(".*_", "", topic))) %>%
+  pull(topic)
+
+df_swarm$topic <- factor(df_swarm$topic, levels = topic_levels)
+pie_df$topic  <- factor(pie_df$topic,  levels = topic_levels)
+pie_df$x <- as.numeric(pie_df$topic)
+
+
+p_swarm_pie_SSF <- ggplot(df_swarm, aes(x = topic, y = log2FC, color = Class)) + #size = log2FC
+  geom_quasirandom(width = 0.3, alpha = .8,stroke = 0.9 ) +
+  scatterpie::geom_scatterpie(
+    data = pie_df,
+    aes(x = x, y = y),
+    cols = pie_cols,
+    pie_scale = 3,
+    color = "white",
+    linewidth = 0.3) +
+  scale_color_manual(values = class_colors) +
+  scale_fill_manual(values = class_colors) +
+  guides(fill = "none", color = guide_legend(ncol = 4,byrow = TRUE)) + #size = guide_legend(ncol = 1)
+  #guides(fill = "none")+
+  theme_bw() +
+  labs(x = "Topic", y = "GoM-DE log2FC - Top25", color = "Class")+ #size = "log2FC"
+  coord_fixed(ratio = 0.6, ylim = c(0, y_max + 2))+
+  theme(
+    panel.grid.major.x = element_blank(),
+    legend.title = element_text(angle = 90),
+    legend.spacing.x = unit(0.1, "mm"),
+    legend.spacing.y = unit(0.1, "mm"),
+     legend.key.size = unit(1, "mm"),
+    legend.position = "bottom",
+    legend.direction = "horizontal")
+
+p_swarm_pie_SSF
+```
+
+```{r}
+asv_topic_sig_SSF <- res_SSF$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>%            # enriched only
+  left_join(distinct(SSF_results$tax_dict, ASV_name, Class),
+            by = c("ASV" = "ASV_name")) %>%
+  mutate(
+    Class = ifelse(Class %in% names(class_colors), Class, "Other"),
+    Class = factor(Class, levels = names(class_colors))
+  ) %>%
+  group_by(ASV) %>%
+  summarise(
+    Class = dplyr::first(Class),
+    n_topics = n_distinct(topic),
+    max_log2FC = max(log2FC),
+    .groups = "drop"
+  )
+
+df_hm_SSF <- asv_topic_sig_SSF %>%
+  count(Class, n_topics)
+print(sum(df_hm_SSF$n))
+
+pheat_SSF<-ggplot(df_hm_SSF, aes(x = factor(n_topics), y = Class, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(
+    low = "#f2e5ff",
+    high = "#5b2a86"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank()
+  ) +
+  labs(
+    x = "Number of topics where ASV is significantly enriched",
+    y = "Class",
+    fill = "ASV count",
+    title = paste0(
+      "Distribution of marker ASVs (n=",
+      nrow(asv_topic_sig_SSF),
+      ")"
+     )
+  )
+pheat_SSF
+```
+
+```{r}
+figure <-  ggpubr::ggarrange(pheat_SSF,p_swarm_pie_SSF, ncol = 2, nrow = 1,widths = c(.4,.6))
+
+figure<-annotate_figure(figure,
+                top = text_grob("Small Euks", color = "black", face = "bold", size = 14))
+
+ggsave(file="output/plots/SSF/gomde_SSF_pie.pdf", figure, width = 12, height = 8, units = "in",dpi=600)
+
+figure
+```
+
+#5.Run Env Analysis
+
+### topic proportion across samples
+```{r}
+## cluster by similarity
+w_den<-as.dendrogram(as.hclust(agnes(W_SSF, diss=F, method =  "ward")),hang=.5)
+
+#data based on the clustering above 
+W_SSF2<-W_SSF
+W_SSF2$Sample_num<-row.names(W_SSF2)
+W_long_SSF<- melt.data.frame( W_SSF2, id.vars="Sample_num", variable_name="topic")
+
+plota_SSF<-W_long_SSF %>%
+      ggplot(aes(x=factor(Sample_num,level=labels(w_den)), value, fill=topic))+
+      geom_col(color=NA,width=1,linewidth=0)+
+      scale_fill_brewer(palette="Paired")+
+      labs(y="Subcommunity Proportion",x=paste0("Samples (n=", dim(W_SSF2)[1],")"),fill="SC#",
+           title=expression(bold("C") * " SSF Chloroplast"))+
+      theme_bw()+
+    scale_x_discrete(labels = NULL, breaks = NULL) + 
+    scale_y_continuous(breaks = seq(0, 1, 0.1),expand = c(0, 0))+
+      theme(axis.title.y = element_text(size = 10),
+             plot.title = element_text(face = "bold", size = 12),
+          axis.text.y = element_text(size = 10),
+          legend.key.height= unit(.05, 'in'),
+        legend.key.width= unit(.05, 'in'),
+        legend.box.spacing = unit(0.01, "pt"))
+
+ggsave("output/plots/SSF/SSF_structure.pdf", plota_SSF, width = 7, height = 2.5, units = "in",dpi=600)
+
+plota_SSF
+
+```
+
+```{r}
+SSF_meta<-data.frame(SSF_results$meta, check.names = FALSE)
+
+#PLOTS B-D: legend bars
+#get sample infor from main clean table
+sample_info<-SSF_meta[,c('Sample_num','new_depths_mdh2','CTD_TEMP','SEASON','YEAR','lake')]
+#drop duplicates - because each OTU gets a value so we have many reps 
+colnames(sample_info)<-c('sample_id','depth','CTD_TEMP','SEASON','YEAR','lake')
+#reorder to match the order of the bar plots 
+sample_info<-sample_info %>% arrange(sample_id,levels=labels(w_den))
+sample_info$sample_id<- factor(sample_info$sample_id,level=labels(w_den))
+
+###make the bar plots 
+lake<-ggplot(data=sample_info, aes(x=sample_id, fill=lake)) + 
+  scale_fill_manual(values=lake_colors)+
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+season<-ggplot(data=sample_info, aes(x=sample_id, fill=SEASON)) + 
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=season_colors)+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+TEMP<-ggplot(data=sample_info, aes(x=sample_id, fill=CTD_TEMP)) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_gradient(low = "blue", high = "red")+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+  
+YEAR<-ggplot(data=sample_info, aes(x=sample_id, fill=factor(YEAR))) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=year_colors)+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+depth<-ggplot(data=sample_info, aes(x=sample_id, fill=depth)) + 
+  scale_fill_manual(values=depth_colors_w)+
+  geom_bar(width = 1,size=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+wx1=0.072
+wx2=0.73
+
+### value definitions
+names_depth=c("spr:","I","E","T","H","smr:","E","D","T","H")
+
+colors_depth= c(season_colors["Spring"],depth_colors_w["Iso_Top"], depth_colors_w["InvS_EPI"],
+          depth_colors_w["InvS_TRM"], depth_colors_w["InvS_HYP"], season_colors["Summer"],
+          depth_colors_w["Strat_EPI"],depth_colors_w["Strat_DCL"],depth_colors_w["Strat_TRM"],
+          depth_colors_w["Strat_HYP"])
+
+#change dynamically
+label_start   <- wx1 + wx2 + 0.01
+label_spacing <- 0.03
+
+season_locx <- label_start + c(0, 2)                            * label_spacing  # 2 labels
+lake_locx   <- label_start + c(0, 1, 2, 3, 4)                  * label_spacing  # 5 labels
+strata_locx <- label_start + c(0, 0.03, 0.04, 0.05, 0.06, 0.09, 0.12, 0.13, 0.14, 0.15)
+year_locx <- label_start + c(0, 0.02, 0.035, 0.05, 0.065, 0.08, 0.095, 0.11, 0.125) #8 labels
+temp_locx   <- label_start + c(0, 1, 2)                        * label_spacing  # 3 labels
+
+
+#gather all the plots
+SSF_structure<- ggdraw()+ theme_void()+
+ draw_plot(plota_SSF,x = 0, y = 0.25, width = 0.878, height = 0.75)+
+ draw_plot(season,x = wx1, y= 0.2, width = wx2, height = 0.05)+
+  draw_plot(lake,x = wx1, y=0.15, width = wx2, height = 0.05)+
+  draw_plot(depth,x = wx1, y = 0.1, width =wx2, height = 0.05)+
+  draw_plot(YEAR,x = wx1, y = 0.05, width =wx2, height = 0.05)+
+  draw_plot(TEMP,x = wx1, y = 0, width =wx2, height = 0.05)+
+  draw_plot_label(x = c(0.01,0.01,0.01,0.01,0.01), y = c(0.25,0.2,0.15,0.1,0.05), 
+                     label =  c("Season","Lake","Depth","Year","Temp"),
+                     hjust = 0, size = 7)+
+  draw_plot_label(x=c(season_locx,lake_locx, strata_locx, year_locx, temp_locx), #temp
+                  y=c(rep(0.25,2), #season x 2
+                      rep(0.2,5), #lake x5
+                      rep(0.15,10), #depth x 10
+                      rep(0.1,9), #year x 9
+                      rep(0.05,3)), #temp x3
+                  label=c('Spring','Summer',
+                          "SU","MI","HU","ER","ON",
+                          names_depth,
+                          "201","2","3","4","5","6","7","8","9",
+                          'Low','High', 'NA'), 
+                  color=c(season_colors["Spring"], season_colors["Summer"],
+                          "#92809E", "#8cabea", "#64baaa","#FFC86A","#ee7061",
+                          colors_depth,
+                          "gray",'red','#A6CEE3','#B2DF8A',"brown","violet","purple","blue","black",
+                          "blue","red","gray"),
+                  hjust = 0, size = 6 )
+
+
+  
+  
+ggsave("output/plots/SSF/SSF_sample_membership.pdf", SSF_structure, width = 7, height = 3, units = "in",dpi=600)
+  
+SSF_structure
+```
+
+
+
+
+### topic location
+```{r}
+#meta long
+SSF_meta_long<- melt.data.frame(subset(SSF_meta,strat_status != "missing_data"), id.vars="Sample_num", variable_name="variable")
+W_long_meta_SSF<-full_join(SSF_meta_long, W_long_SSF, by = "Sample_num")
+
+p_season<-subset(W_long_meta_SSF,(variable == "SEASON") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(season_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=season_colors)+
+      theme_bw()+
+      labs(fill="Season",title="",y="Relative contribution",x= "Subcommunity")
+
+p_season
+
+p_lake<-subset(W_long_meta_SSF,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      theme_bw()+
+      labs(fill="Lake",title="",y="",x= "")
+p_lake
+
+p_layer<-subset(W_long_meta_SSF,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      theme_classic()+
+      labs(fill="Layer",title="",y="",x= "")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+
+
+p_layer
+
+p_year<-subset(W_long_meta_SSF,(variable == "YEAR") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(year_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=year_colors)+
+      theme_bw()+
+      labs(fill="Year",title="",y="",x= "")
+
+p_year
+
+p_status<-subset(W_long_meta_SSF,(variable == "strat_status2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill= value.x))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=strat_colors)+
+      labs(x="",y="", fill="Strat. Type")+
+      theme_bw()
+
+p_status
+
+#sample prop - how much does this sc represent overall 
+hold<-subset(W_long_meta_SSF, variable == "YEAR")  #can be any variable 
+prop<-hold %>% group_by(topic) %>% dplyr::summarise(prop=round((sum(value.y)/sum(hold$value.y))*100))
+
+p_dist<-ggplot(prop, aes(x=topic, y=prop, fill=topic)) +
+  geom_col() +
+  geom_text(aes(label=paste0(round(prop, 1), "%")), 
+            vjust=-0.5, 
+            size=3, 
+            fontface="bold") +  
+  scale_fill_brewer(palette="Paired") +
+  labs(x="", y="% of all sample distribution") +
+  theme_classic() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))+
+  theme(legend.position="none", 
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank(),
+        theme(axis.title=element_text(size=8, face="bold")))
+
+
+figure = ggpubr::ggarrange(p_season, p_status, p_layer, p_lake, p_year,p_dist, ncol = 3, nrow = 2)
+
+figure<-ggpubr::annotate_figure(figure, 
+                        top = ggpubr::text_grob("SSF EUK: Topic Distribution across samples", color = "black", 
+                                        face = "bold", size = 12))
+
+ggsave("output/plots/SSF/SSF_membership.pdf", figure, width = 9, height = 5, units = "in",dpi=600)
+
+figure
+
+```
+
+
+```{r}
+
+p_lake<-subset(W_long_meta_SSF,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Lake",title=expression(bold("B") * " Meta Overview"), 
+           y="Relative contribution",x= "Subcommunity")
+p_lake
+
+p_layer<-subset(W_long_meta_SSF,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Layer",title="",y="Relative contribution",x= "Subcommunity")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+SSF_meta_plt<- ggpubr::ggarrange(p_lake, p_layer, ncol = 2, nrow = 1)
+SSF_meta_plt
+```
+
+##prep meta
+```{r}
+prep_SSF   <- prep_topic_meta(W_SSF, SSF_meta)
+```
+## Limma
+```{r}
+limma_res_SSF_clr <- run_topic_clr_limma(prep_SSF$W_clean, prep_SSF$meta_clean)
+sig_limma_clr_SSF  <- limma_res_SSF_clr$res_df  %>% filter(adj_p_value_by_term < 0.05)
+sig_limma_clr_SSF 
+```
+
+```{r}
+SSF_limma_crl <- plot_limma(
+  sig_limma_clr_SSF ,
+  topic_order = colnames(prep_SSF$W_clean),
+  title       = expression(bold("C") * " Limma") ,
+  meta_names  = meta_names,
+  param_order = param_order
+)
+
+SSF_limma_crl
+```
+
+
+## RM + SHAP
+```{r}
+results_clr_SSF <- run_rf_oob_clr(prep_SSF$W_clean, prep_SSF$meta_clean)
+results_clr_SSF
+```
+```{r}
+shap_dir_SSF <- run_shap_direction(
+  rf_models  = results_clr_SSF$rf_models,
+  meta_clean = prep_SSF$meta_clean,
+  nsim       = 500
+)
+
+#save so we don't need to re-run everytime
+saveRDS(shap_dir_SSF, file = "output/objects/SSF/shap_dir_SSF.rds")
+shap_dir_SSF <- readRDS("output/objects/SSF/shap_dir_SSF.rds")
+
+shap_dir_SSF
+```
+
+```{r}
+# get the new names in the same order as param_order
+new_order <- meta_names$new[match(param_order, meta_names$original)]
+
+shap_dir_SSF2<- shap_dir_SSF %>%
+  left_join(meta_names, by = c("Env" = "original")) %>%
+  mutate(Env= coalesce(new, Env)) %>% 
+  mutate(Env = factor(Env, levels = new_order))
+
+SSF_rfshap<-plot_importance_direction_dot(
+  shap_dir    = shap_dir_SSF2,
+  rf_perf     = subset(results_clr_SSF$rf_perf, Topic !="6"), ##6 is dropped from Limma so drop here too it has low R2
+  top_n       = 15,
+  param_order = new_order,
+  title       = expression(bold("D") * " RM + SHAP")
+)
+
+#ggsave("../output/plots/FL/FL_RFshap.png", p, width = 8, height = 6, units = "in",dpi=600)
+
+SSF_rfshap
+
+```
+
+#Summary plot
+```{r}
+SSF_limma_crl_tight <- SSF_limma_crl + theme(plot.margin = margin(0, -2, 0, 0))
+SSF_rfshap_tight    <- SSF_rfshap    + theme(plot.margin = margin(0, 0, 0, -2))
+bottom_right <- plot_grid(SSF_limma_crl_tight, SSF_rfshap_tight, ncol = 2,rel_widths = c(.8, 1.2))
+
+
+right_col <- plot_grid(SSF_meta_plt, bottom_right, nrow = 2,rel_heights = c(.8, 1.3))
+
+#grab ht_SSF as a grob if it's a ComplexHeatmap
+ht_grob <- grid::grid.grabExpr(ComplexHeatmap::draw(ht_SSF))
+SSF_summary <- plot_grid(ht_grob, right_col, 
+                        ncol = 2,
+                        align = "h",
+                        axis = "tb",
+                        rel_widths = c(1, 1.3))
+
+ggsave("output/plots/SSF/SSF_summary.pdf", SSF_summary, width = 18, height = 8, units = "in",dpi=600)
+SSF_summary
+```
+
+
+
+#____________
+#**LSF**
+
+#2. Prep Data
+```{r}
+#this inlcudes counts, tax_dict, meta
+LSF_results<-process_phyloseq_EUK(LSF_data)
+
+#save the counts tables you will need for perplexity
+write.csv(LSF_results$counts, "output/tables/runLSF/LSF_counts.csv")
+
+#free up some memoery we don't need the FL_data anymore and we can call it in if we do 
+rm(LSF_data)
+gc()  
+
+```
+
+#3. Run LDA
+### run LDA models 
+```{r run-lda-models}
+lda_varying_params_lists_LSF <-  list()
+for (k in 1:20) {lda_varying_params_lists_LSF[[paste0("k",k)]] <- list(k = k)}
+
+lda_models_LSF  <- 
+  run_lda_models(
+    data = LSF_results$counts,
+    lda_varying_params_lists = lda_varying_params_lists_LSF,
+    lda_fixed_params_list = list(method = "VEM"),
+    dir = "../output/saved_models/runsLSF/",
+    #reset = TRUE,
+    #verbose = TRUE
+  )
+
+```
+
+
+### align the topics based on different methods
+```{r align-topics}
+
+aligned_topics_product_LSF <- 
+  align_topics(
+    models = lda_models_LSF,
+    method = "product") 
+
+compute_number_of_paths(aligned_topics_product_LSF) %>% 
+  plot_number_of_paths() + 
+  ggtitle("Method: product")
+
+aligned_topics_transport_LSF <- 
+  align_topics(
+    models = lda_models_LSF,
+    method = "transport") 
+
+compute_number_of_paths(aligned_topics_transport_LSF) %>% 
+  plot_number_of_paths() + 
+  ggtitle("Method: transport")
+
+```
+
+### top taxa alingment
+```{r}
+aligned_topics_transport_k <- 
+  align_topics(
+    models = lda_models_LSF[c(1,13)],
+    method = "transport") 
+
+p<-plot(aligned_topics_transport_k,
+     add_leaves = TRUE, 
+     label_topics = TRUE,
+     n_features_in_leaves = 2,
+     min_feature_prop = 0.01,
+     leaves_text_size = 8,
+     color_by="topic",
+      model_name_repair_fun = function(x) str_remove_all(x, "k"))+
+     theme_bw()+
+    labs(x="")
+
+#ggsave(p, filename = "PA_k10.png", height = 5, width = 9, units = "cm", scale = 1.5)
+
+p
+```
+
+### perplexity (for diagnostics)
+```{r}
+LSF_perplexity = read.csv("perplexity/LSF_perplexity.csv",header=TRUE)
+
+p<-ggplot(LSF_perplexity, aes(x = k, y = perplexity)) +
+   geom_point() +
+   geom_smooth(se = FALSE) +
+   theme_bw()+
+   labs(x = "Candidate number of topics", y = "Perplexity score")
+
+p
+```
+
+##diagnostics figure
+```{r}
+figure <- make_figure2(aligned_topics_product = aligned_topics_product_LSF, 
+                           aligned_topics_transport = aligned_topics_transport_LSF,
+                       perplexity_df=LSF_perplexity,size_fraction="Large Chloroplast")
+
+
+ggsave(figure, filename = "output/plots/LSF/diagnostics.png", height = 14, width = 21, units = "cm", scale = 1.5)
+
+figure
+
+```
+
+Panel a: Paths track close to the diagonal at k=11
+Panel b: Coherence scores are mostly strong (0.5–0.8) at k=11, before degradation sets in at higher k
+Panel c: Refinement score has plateaued by k=11, with little gain from adding more topics
+Panel d: k=11 sits at the flattening point of the perplexity curve, capturing most model improvement efficiently
+And for interpretation less is better 
+
+
+### W and A
+```{r}
+W_LSF = as.data.frame(lda_models_LSF$k11$gamma)
+colnames(W_LSF)<- sub("V", "", colnames(W_LSF))
+W_LSF
+```
+
+```{r}
+A_LSF <-as.data.frame(exp(lda_models_LSF$k11$beta))
+A_df_LSF<-A_LSF ## to work on rare
+A_LSF <- A_LSF %>% mutate(topic = row_number())
+
+#change the ASV names 
+A_long_LSF<- melt.data.frame(A_LSF, id.vars = "topic",variable_name="ASV")
+A_long_LSF$Phyla<-sapply(strsplit(as.character(A_long_LSF$ASV)," "), "[", 1)
+A_long_LSF$Order<-paste(sapply(strsplit(as.character(A_long_LSF$ASV)," "), "[", 2),
+                    sapply(strsplit(as.character(A_long_LSF$ASV)," "), "[", 3),sep="_")
+A_long_LSF$Order_raw<-paste(sapply(strsplit(as.character(A_long_LSF$Order),"_"), "[", 1))
+
+#A_long_LSF<- A_long_LSF
+#save(A_long_LSF,file="../output/tables/w_matrix/pa_tax")
+
+
+A_long_LSF <- A_long_LSF %>% mutate(asv_type=case_when(value >= 0.1 ~ ">=10%", value < 0.1 ~ "<10%"))
+A_long_LSF
+```
+
+#4.Run GoMDE
+```{r}
+#res_LSF  <- run_gomde_markers(LSF_results$counts, LSF_results$tax_dict,W_LSF,A_long_LSF,  top_n = 25)
+
+#save so you don't have to re-computer
+#saveRDS(res_LSF,"output/objects/LSF/res_LSF.rds")
+res_LSF<-readRDS("output/objects/LSF/res_LSF.rds")
+
+res_LSF
+```
+
+### overview
+```{r}
+#grab data from full set not top25 -- but still only SPECIALIST
+mat_df <- res_LSF$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>% #sig enrichment 
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%      # specialists only
+  ungroup() %>%
+  left_join(LSF_results$tax_dict, by = c("ASV" = "ASV_name")) %>%
+  filter(!is.na(Order)) %>%
+  filter(!Order %in% c("unclass_plas")) %>%
+  mutate(Class_clean = ifelse(Class %in% names(class_colors), Class, "Other")) %>%
+  group_by(topic, Class, Class_clean, Order) %>%
+  dplyr::summarise(n_asv = n(), .groups = "drop")
+
+
+mat_df
+
+## collapse orders we only see in 1 topic
+min_asv <- 5  # orders with max < 3 across all topics become Other [Phylum]
+
+# build matrix
+# build full matrix first to know which orders are sparse
+mat_full <- mat_df %>%
+  group_by(Order, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order") %>%
+  as.matrix()
+
+# identify sparse orders
+sparse_orders <- rownames(mat_full)[apply(mat_full, 1, max) < min_asv]
+
+# collapse in mat_df
+mat_df_collapsed <- mat_df %>%
+  mutate(Order_plot = ifelse(Order %in% sparse_orders,
+                           ifelse(Class_clean == "Other", 
+                                  "Other (rare Class)",  # catch the Other Other case this is when we made phyla other
+                                  paste0("Multiple ", Class_clean)),
+                           Order)) %>% 
+  group_by(topic, Class_clean, Order_plot) %>%
+  dplyr::summarise(n_asv = sum(n_asv), .groups = "drop")
+
+# rebuild matrix
+mat <- mat_df_collapsed %>%
+  group_by(Order_plot, topic) %>%
+  summarise(n_asv = sum(n_asv), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = topic, values_from = n_asv, values_fill = 0) %>%
+  tibble::column_to_rownames("Order_plot") %>%
+  as.matrix()
+
+mat <- mat[, order(as.numeric(colnames(mat)))]
+colnames(mat) <- paste0("LSF_", colnames(mat))
+mat <- mat[rowSums(mat) > 0, ]
+
+
+order_class <- mat_df_collapsed %>%
+  distinct(Order_plot, Class_clean) %>%
+  filter(Order_plot %in% rownames(mat))
+
+class_vec <- setNames(order_class$Class_clean, order_class$Order_plot)
+class_vec <- class_vec[rownames(mat)]
+
+class_colors_clean <- class_colors
+
+# lighten phylum colors for Other rows
+lighten <- function(hex, factor = 0.5) {
+  rgb <- col2rgb(hex)
+  rgb_light <- rgb + (255 - rgb) * factor
+  rgb(rgb_light[1,], rgb_light[2,], rgb_light[3,], maxColorValue = 255)
+}
+
+# build annotation colors - named orders get full color, Other gets lightened
+row_colors <- sapply(rownames(mat), function(ord) {
+  class <- class_vec[ord]
+  base_col <- class_colors_clean[class]
+  if (grepl("^Multiple ", ord)) lighten(base_col, 0.5) else base_col
+})
+
+# for ComplexHeatmap we need the annotation to use the phylum color vector
+# but mark Other rows differently with a border or pattern - simplest is
+# just to show them as a named color per row
+row_annot <- rowAnnotation(
+  Class = class_vec,
+  col = list(Class = class_colors_clean),
+  show_annotation_name = FALSE,
+  annotation_legend_param = list(Class = list(ncol = 1)),
+  show_legend = TRUE  
+)
+
+
+# color scale
+col_fun <- colorRamp2(c(0, max(mat)), c("white", "#2C7FB8"))
+
+row_title <- rowAnnotation(
+  label = anno_text("Order", 
+                    rot = 90, 
+                    just = "center",
+                    gp = gpar(fontsize = 10, fontface = "bold")),
+  width = unit(0.8, "cm")
+)
+
+row_name_cols <- ifelse(grepl("^Multiple", rownames(mat)), "grey50", "black")
+row_name_fontface <- ifelse(grepl("^Multiple ", rownames(mat)), "italic", "plain")
+
+ht_LSF <- Heatmap(mat,
+  name = "ASV count",
+  col = col_fun,
+  left_annotation = row_annot,
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  show_row_dend = TRUE,
+  show_heatmap_legend = FALSE,
+  row_names_gp = gpar(fontsize = 8,
+                      col = row_name_cols,
+                      fontface = row_name_fontface),
+  column_names_gp = gpar(fontsize = 10),
+  column_title = expression(bold("A") * " Fingerprint Taxa"),
+  column_title_gp = gpar(fontsize = 12, fontface = "bold"),
+  rect_gp = gpar(col = "grey90", lwd = 0.5),
+  width = unit(10, "cm"),
+  row_names_max_width = max_text_width(rownames(mat), gp = gpar(fontsize = 8)),
+  layer_fun = function(j, i, x, y, width, height, fill) {
+    v <- pindex(mat, i, j)
+    grid.text(ifelse(v > 0, as.character(v), ""), x, y,
+              gp = gpar(fontsize = 7, col = "grey20"))
+  },
+  row_title = "Order",
+  row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+  row_title_side = "right"
+) 
+
+ht_LSF
+
+```
+
+## top markers summary
+```{r}
+# swarm data FIRST (defines topic order)
+df_swarm <- res_LSF$top_markers %>%
+  group_by(ASV) %>%
+  filter(n_distinct(topic) == 1) %>%        # specialists only
+  ungroup() %>%
+   mutate(
+    topic  = factor(topic),
+    Class = ifelse(Class %in% names(class_colors), Class, "Other")
+  )
+
+# pie composition per topic
+pie_df <- df_swarm %>%
+  count(topic, Class, name = "n") %>%
+  group_by(topic) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>%
+  select(topic, Class, prop) %>%
+  pivot_wider(names_from = Class, values_from = prop, values_fill = 0)
+
+# CONTROL PIE LOCATION (global annotation band)
+topic_levels <- levels(df_swarm$topic)
+pie_df <- pie_df %>%
+  mutate(x = as.numeric(factor(topic, levels = topic_levels)))
+
+y_max <- max(df_swarm$log2FC, na.rm = TRUE)
+pie_df$y <- y_max + 1.5   # <-- you can set this to whatever you want
+
+pie_cols <- intersect(names(pie_df), names(class_colors))
+
+## topic levels
+topic_levels <- df_swarm %>%
+  distinct(topic) %>%
+  arrange(as.numeric(sub(".*_", "", topic))) %>%
+  pull(topic)
+
+df_swarm$topic <- factor(df_swarm$topic, levels = topic_levels)
+pie_df$topic  <- factor(pie_df$topic,  levels = topic_levels)
+pie_df$x <- as.numeric(pie_df$topic)
+
+
+p_swarm_pie_LSF <- ggplot(df_swarm, aes(x = topic, y = log2FC, color = Class)) + #size = log2FC
+  geom_quasirandom(width = 0.3, alpha = .8,stroke = 0.9 ) +
+  scatterpie::geom_scatterpie(
+    data = pie_df,
+    aes(x = x, y = y),
+    cols = pie_cols,
+    pie_scale = 3,
+    color = "white",
+    linewidth = 0.3) +
+  scale_color_manual(values = class_colors) +
+  scale_fill_manual(values = class_colors) +
+  guides(fill = "none", color = guide_legend(ncol = 4,byrow = TRUE)) + #size = guide_legend(ncol = 1)
+  #guides(fill = "none")+
+  theme_bw() +
+  labs(x = "Topic", y = "GoM-DE log2FC - Top25", color = "Class")+ #size = "log2FC"
+  coord_fixed(ratio = 0.6, ylim = c(0, y_max + 2))+
+  theme(
+    panel.grid.major.x = element_blank(),
+    legend.title = element_text(angle = 90),
+    legend.spacing.x = unit(0.1, "mm"),
+    legend.spacing.y = unit(0.1, "mm"),
+     legend.key.size = unit(1, "mm"),
+    legend.position = "bottom",
+    legend.direction = "horizontal")
+
+p_swarm_pie_LSF
+```
+
+```{r}
+asv_topic_sig_LSF <- res_LSF$gomde %>%
+  filter(lfsr < 0.05, log2FC > 0) %>%            # enriched only
+  left_join(distinct(LSF_results$tax_dict, ASV_name, Class),
+            by = c("ASV" = "ASV_name")) %>%
+  mutate(
+    Class = ifelse(Class %in% names(class_colors), Class, "Other"),
+    Class = factor(Class, levels = names(class_colors))
+  ) %>%
+  group_by(ASV) %>%
+  summarise(
+    Class = dplyr::first(Class),
+    n_topics = n_distinct(topic),
+    max_log2FC = max(log2FC),
+    .groups = "drop"
+  )
+
+df_hm_LSF <- asv_topic_sig_LSF %>%
+  count(Class, n_topics)
+print(sum(df_hm_LSF$n))
+
+pheat_LSF<-ggplot(df_hm_LSF, aes(x = factor(n_topics), y = Class, fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 3) +
+  scale_fill_gradient(
+    low = "#f2e5ff",
+    high = "#5b2a86"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank()
+  ) +
+  labs(
+    x = "Number of topics where ASV is significantly enriched",
+    y = "Class",
+    fill = "ASV count",
+    title = paste0(
+      "Distribution of marker ASVs (n=",
+      nrow(asv_topic_sig_LSF),
+      ")"
+     )
+  )
+pheat_LSF
+```
+
+```{r}
+figure <-  ggpubr::ggarrange(pheat_LSF,p_swarm_pie_LSF, ncol = 2, nrow = 1,widths = c(.4,.6))
+
+figure<-annotate_figure(figure,
+                top = text_grob("Large Euks", color = "black", face = "bold", size = 14))
+
+ggsave(file="output/plots/LSF/gomde_LSF_pie.pdf", figure, width = 12, height = 8, units = "in",dpi=600)
+
+figure
+```
+
+#5.Run Env Analysis
+
+### topic proportion across samples
+```{r}
+## cluster by similarity
+w_den<-as.dendrogram(as.hclust(agnes(W_LSF, diss=F, method =  "ward")),hang=.5)
+
+#data based on the clustering above 
+W_LSF2<-W_LSF
+W_LSF2$Sample_num<-row.names(W_LSF2)
+W_long_LSF<- melt.data.frame( W_LSF2, id.vars="Sample_num", variable_name="topic")
+
+plota_LSF<-W_long_LSF %>%
+      ggplot(aes(x=factor(Sample_num,level=labels(w_den)), value, fill=topic))+
+      geom_col(color=NA,width=1,linewidth=0)+
+      scale_fill_brewer(palette="Paired")+
+      labs(y="Subcommunity Proportion",x=paste0("Samples (n=", dim(W_LSF2)[1],")"),fill="SC#",
+           title=expression(bold("D") * " LSF Chloroplast"))+
+      theme_bw()+
+    scale_x_discrete(labels = NULL, breaks = NULL) + 
+    scale_y_continuous(breaks = seq(0, 1, 0.1),expand = c(0, 0))+
+      theme(axis.title.y = element_text(size = 10),
+             plot.title = element_text(face = "bold", size = 12),
+          axis.text.y = element_text(size = 10),
+          legend.key.height= unit(.05, 'in'),
+        legend.key.width= unit(.05, 'in'),
+        legend.box.spacing = unit(0.01, "pt"))
+
+ggsave("output/plots/LSF/LSF_structure.pdf", plota_LSF, width = 7, height = 2.5, units = "in",dpi=600)
+
+plota_LSF
+
+```
+
+```{r}
+LSF_meta<-data.frame(LSF_results$meta, check.names = FALSE)
+
+#PLOTS B-D: legend bars
+#get sample infor from main clean table
+sample_info<-LSF_meta[,c('Sample_num','new_depths_mdh2','CTD_TEMP','SEASON','YEAR','lake')]
+#drop duplicates - because each OTU gets a value so we have many reps 
+colnames(sample_info)<-c('sample_id','depth','CTD_TEMP','SEASON','YEAR','lake')
+#reorder to match the order of the bar plots 
+sample_info<-sample_info %>% arrange(sample_id,levels=labels(w_den))
+sample_info$sample_id<- factor(sample_info$sample_id,level=labels(w_den))
+
+###make the bar plots 
+lake<-ggplot(data=sample_info, aes(x=sample_id, fill=lake)) + 
+  scale_fill_manual(values=lake_colors)+
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+season<-ggplot(data=sample_info, aes(x=sample_id, fill=SEASON)) + 
+  geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=season_colors)+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+TEMP<-ggplot(data=sample_info, aes(x=sample_id, fill=CTD_TEMP)) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_gradient(low = "blue", high = "red")+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+  
+YEAR<-ggplot(data=sample_info, aes(x=sample_id, fill=factor(YEAR))) + 
+geom_bar(width = 1,linewidth=0)+ theme_void()+
+  scale_fill_manual(values=year_colors)+
+theme(axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+depth<-ggplot(data=sample_info, aes(x=sample_id, fill=depth)) + 
+  scale_fill_manual(values=depth_colors_w)+
+  geom_bar(width = 1,size=0)+ theme_void()+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+    strip.text.x = element_blank(),legend.position="none")+xlab("") + ylab("")
+
+wx1=0.072
+wx2=0.73
+
+### value definitions
+names_depth=c("spr:","I","E","T","H","smr:","E","D","T","H")
+
+colors_depth= c(season_colors["Spring"],depth_colors_w["Iso_Top"], depth_colors_w["InvS_EPI"],
+          depth_colors_w["InvS_TRM"], depth_colors_w["InvS_HYP"], season_colors["Summer"],
+          depth_colors_w["Strat_EPI"],depth_colors_w["Strat_DCL"],depth_colors_w["Strat_TRM"],
+          depth_colors_w["Strat_HYP"])
+
+#change dynamically
+label_start   <- wx1 + wx2 + 0.01
+label_spacing <- 0.03
+
+season_locx <- label_start + c(0, 2)                            * label_spacing  # 2 labels
+lake_locx   <- label_start + c(0, 1, 2, 3, 4)                  * label_spacing  # 5 labels
+strata_locx <- label_start + c(0, 0.03, 0.04, 0.05, 0.06, 0.09, 0.12, 0.13, 0.14, 0.15)
+year_locx <- label_start + c(0, 0.02, 0.035, 0.05, 0.065, 0.08, 0.095, 0.11, 0.125) #8 labels
+temp_locx   <- label_start + c(0, 1, 2)                        * label_spacing  # 3 labels
+
+
+#gather all the plots
+LSF_structure<- ggdraw()+ theme_void()+
+ draw_plot(plota_LSF,x = 0, y = 0.25, width = 0.878, height = 0.75)+
+ draw_plot(season,x = wx1, y= 0.2, width = wx2, height = 0.05)+
+  draw_plot(lake,x = wx1, y=0.15, width = wx2, height = 0.05)+
+  draw_plot(depth,x = wx1, y = 0.1, width =wx2, height = 0.05)+
+  draw_plot(YEAR,x = wx1, y = 0.05, width =wx2, height = 0.05)+
+  draw_plot(TEMP,x = wx1, y = 0, width =wx2, height = 0.05)+
+  draw_plot_label(x = c(0.01,0.01,0.01,0.01,0.01), y = c(0.25,0.2,0.15,0.1,0.05), 
+                     label =  c("Season","Lake","Depth","Year","Temp"),
+                     hjust = 0, size = 7)+
+  draw_plot_label(x=c(season_locx,lake_locx, strata_locx, year_locx, temp_locx), #temp
+                  y=c(rep(0.25,2), #season x 2
+                      rep(0.2,5), #lake x5
+                      rep(0.15,10), #depth x 10
+                      rep(0.1,9), #year x 9
+                      rep(0.05,3)), #temp x3
+                  label=c('Spring','Summer',
+                          "SU","MI","HU","ER","ON",
+                          names_depth,
+                          "201","2","3","4","5","6","7","8","9",
+                          'Low','High', 'NA'), 
+                  color=c(season_colors["Spring"], season_colors["Summer"],
+                          "#92809E", "#8cabea", "#64baaa","#FFC86A","#ee7061",
+                          colors_depth,
+                          "gray",'red','#A6CEE3','#B2DF8A',"brown","violet","purple","blue","black",
+                          "blue","red","gray"),
+                  hjust = 0, size = 6 )
+
+
+  
+  
+ggsave("output/plots/LSF/LSF_sample_membership.pdf", LSF_structure, width = 7, height = 3, units = "in",dpi=600)
+  
+LSF_structure
+```
+
+
+
+
+### topic location
+```{r}
+#meta long
+LSF_meta_long<- melt.data.frame(subset(LSF_meta,strat_status != "missing_data"), id.vars="Sample_num", variable_name="variable")
+W_long_meta_LSF<-full_join(LSF_meta_long, W_long_LSF, by = "Sample_num")
+
+p_season<-subset(W_long_meta_LSF,(variable == "SEASON") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(season_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=season_colors)+
+      theme_bw()+
+      labs(fill="Season",title="",y="Relative contribution",x= "Subcommunity")
+
+p_season
+
+p_lake<-subset(W_long_meta_LSF,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      theme_bw()+
+      labs(fill="Lake",title="",y="",x= "")
+p_lake
+
+p_layer<-subset(W_long_meta_LSF,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      theme_classic()+
+      labs(fill="Layer",title="",y="",x= "")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+
+
+p_layer
+
+p_year<-subset(W_long_meta_LSF,(variable == "YEAR") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(year_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=year_colors)+
+      theme_bw()+
+      labs(fill="Year",title="",y="",x= "")
+
+p_year
+
+p_status<-subset(W_long_meta_LSF,(variable == "strat_status2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill= value.x))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=strat_colors)+
+      labs(x="",y="", fill="Strat. Type")+
+      theme_bw()
+
+p_status
+
+#sample prop - how much does this sc represent overall 
+hold<-subset(W_long_meta_LSF, variable == "YEAR")  #can be any variable 
+prop<-hold %>% group_by(topic) %>% dplyr::summarise(prop=round((sum(value.y)/sum(hold$value.y))*100))
+
+p_dist<-ggplot(prop, aes(x=topic, y=prop, fill=topic)) +
+  geom_col() +
+  geom_text(aes(label=paste0(round(prop, 1), "%")), 
+            vjust=-0.5, 
+            size=3, 
+            fontface="bold") +  
+  scale_fill_brewer(palette="Paired") +
+  labs(x="", y="% of all sample distribution") +
+  theme_classic() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))+
+  theme(legend.position="none", 
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank(),
+        theme(axis.title=element_text(size=8, face="bold")))
+
+
+figure = ggpubr::ggarrange(p_season, p_status, p_layer, p_lake, p_year,p_dist, ncol = 3, nrow = 2)
+
+figure<-ggpubr::annotate_figure(figure, 
+                        top = ggpubr::text_grob("LSF EUK: Topic Distribution across samples", color = "black", 
+                                        face = "bold", size = 12))
+
+ggsave("output/plots/LSF/LSF_membership.pdf", figure, width = 9, height = 5, units = "in",dpi=600)
+
+figure
+
+```
+
+
+```{r}
+
+p_lake<-subset(W_long_meta_LSF,(variable == "lake") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(lake_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=lake_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Lake",title=expression(bold("B") * " Meta Overview"), 
+           y="Relative contribution",x= "Subcommunity")
+p_lake
+
+p_layer<-subset(W_long_meta_LSF,(variable == "new_depths_mdh2") & (value.y>0)) %>%
+      ggplot(aes(topic, value.y, fill=factor(value.x,levels=names(depth2_colors))))+
+      geom_col(position="fill")+
+      #geom_col()+
+      scale_fill_manual(values=depth2_colors)+
+      scale_alpha_manual(values = c("yes" = 1, "no" = 0.3), guide = "none") +
+      theme_classic()+
+      labs(fill="Layer",title="",y="Relative contribution",x= "Subcommunity")+
+      theme(
+        legend.position="right",  # Adjust if needed
+        legend.key.size=unit(0.5, "cm"),  # Reduce legend key size
+        legend.text=element_text(size=8),  # Smaller legend text
+        legend.spacing.x=unit(0.2, "cm")  # Reduce spacing between legend items
+      )
+
+LSF_meta_plt<- ggpubr::ggarrange(p_lake, p_layer, ncol = 2, nrow = 1)
+LSF_meta_plt
+```
+
+
+
+##prep meta
+```{r}
+prep_LSF   <- prep_topic_meta(W_LSF, LSF_meta)
+```
+## Limma
+```{r}
+limma_res_LSF_clr <- run_topic_clr_limma(prep_LSF$W_clean, prep_LSF$meta_clean)
+sig_limma_clr_LSF  <- limma_res_LSF_clr$res_df  %>% filter(adj_p_value_by_term < 0.05)
+sig_limma_clr_LSF 
+```
+
+```{r}
+LSF_limma_crl <- plot_limma(
+  sig_limma_clr_LSF ,
+  topic_order = colnames(prep_LSF$W_clean),
+  title       = expression(bold("C") * " Limma") ,
+  meta_names  = meta_names,
+  param_order = param_order
+)
+
+LSF_limma_crl
+```
+
+
+## RM + SHAP
+```{r}
+results_clr_LSF <- run_rf_oob_clr(prep_LSF$W_clean, prep_LSF$meta_clean)
+results_clr_LSF
+```
+```{r}
+# shap_dir_LSF <- run_shap_direction(
+#   rf_models  = results_clr_LSF$rf_models,
+#   meta_clean = prep_LSF$meta_clean,
+#   nsim       = 500
+# )
+
+#save so we don't need to re-run everytime
+saveRDS(shap_dir_LSF, file = "output/objects/LSF/shap_dir_LSF.rds")
+shap_dir_LSF <- readRDS("output/objects/LSF/shap_dir_LSF.rds")
+
+shap_dir_LSF
+```
+
+```{r}
+# get the new names in the same order as param_order
+new_order <- meta_names$new[match(param_order, meta_names$original)]
+
+shap_dir_LSF2<- shap_dir_LSF %>%
+  left_join(meta_names, by = c("Env" = "original")) %>%
+  mutate(Env= coalesce(new, Env)) %>% 
+  mutate(Env = factor(Env, levels = new_order))
+
+LSF_rfshap<-plot_importance_direction_dot(
+  shap_dir    = shap_dir_LSF2,
+  rf_perf     = results_clr_LSF$rf_perf,
+  top_n       = 15,
+  param_order = new_order,
+  title       = expression(bold("D") * " RM + SHAP")
+)
+
+#ggsave("../output/plots/FL/FL_RFshap.png", p, width = 8, height = 6, units = "in",dpi=600)
+
+LSF_rfshap
+
+```
+#Summary Plot
+```{r}
+LSF_limma_crl_tight <- LSF_limma_crl + theme(plot.margin = margin(0, -2, 0, 0))
+LSF_rfshap_tight    <- LSF_rfshap    + theme(plot.margin = margin(0, 0, 0, -2))
+bottom_right <- plot_grid(LSF_limma_crl_tight, LSF_rfshap_tight, ncol = 2,rel_widths = c(.8, 1.2))
+
+
+right_col <- plot_grid(LSF_meta_plt, bottom_right, nrow = 2,rel_heights = c(.8, 1.3))
+
+#grab ht_LSF as a grob if it's a ComplexHeatmap
+ht_grob <- grid::grid.grabExpr(ComplexHeatmap::draw(ht_LSF))
+LSF_summary <- plot_grid(ht_grob, right_col, 
+                        ncol = 2,
+                        align = "h",
+                        axis = "tb",
+                        rel_widths = c(1, 1.3))
+
+ggsave("output/plots/LSF/LSF_summary.pdf", LSF_summary, width = 18, height = 8, units = "in",dpi=600)
+LSF_summary
+```
+
+
+#____________
+# All blocks
+## Samples used
+```{r}
+library(ggtext)
+```
+
+```{r}
+station_order=c("SU17M","SU08M","SU01M","SUFE","SU18","SU15","SU12","SU06",
+                "HU54M","HU45M","HU15M","HUFE",
+                "MI41M","MI27M","MI18M","MI40","MI50B","MIFO",
+                "ER91M","ER78M","ER15M",
+                "ON33M","ON41","ON55M","ON68B","ON64B")
+
+plot_sample_heatmap <- function(X_meta, letter, name) {
+  
+  summary <- X_meta %>% 
+    group_by(STATION_ID, SEASON, YEAR) %>% 
+    dplyr::summarise(total_samples = n_distinct(Sample_num), .groups = "drop")
+  
+  summary$season_year <- paste(summary$SEASON, summary$YEAR, sep = "_")
+  summary <- summary[, c("STATION_ID", "season_year", "total_samples")]
+  
+  station_order <- sort(unique(summary$STATION_ID))
+  
+  p <- ggplot(summary, 
+              aes(x = season_year, y = factor(STATION_ID, levels = rev(station_order)), fill = total_samples)) +
+    geom_tile() +
+    coord_fixed() +
+    theme_classic() +
+    theme(axis.text.x = element_markdown(angle = 90)) +
+    scale_fill_gradient(low = "lightgreen", high = "darkgreen") +
+    geom_text(aes(label = total_samples), color = "white", size = 3) +
+    labs(fill = "# Samples", y = "Station ID", x = "Season",
+         title = bquote(bold(.(letter)) ~ .(paste0(name, " n=", sum(summary$total_samples)))))
+  
+  return(p)
+}
+
+p_fl<- plot_sample_heatmap(FL_meta, "A", "Free Living Prokaryotes")
+p_pa<- plot_sample_heatmap(PA_meta, "B", "Particle Associated Prokaryotes")
+p_ssf<- plot_sample_heatmap(SSF_meta, "C", "Small Chloroplast")
+p_lsf<- plot_sample_heatmap(LSF_meta, "D", "Large Chloroplast")
+
+
+all_samples<-ggpubr::ggarrange(p_fl, p_pa, p_ssf, p_lsf, 
+                                 ncol = 2, nrow = 2)
+
+ggsave("output/plots/ALL/ALL_samples_used.pdf", all_samples, width = 12, height = 12, units = "in",dpi=600)
+all_samples
+
+```
+
+
+## Structure summary 
+```{r}
+all_strcuture<-ggpubr::ggarrange(FL_structure,PA_structure,
+                                 SSF_structure,LSF_structure,
+                                 ncol = 2, nrow = 2)
+
+ggsave("output/plots/ALL/ALL_structure.pdf", all_strcuture, width = 14, height = 6, units = "in",dpi=600)
+all_strcuture
+```
+
+## GoMDE
+```{r}
+# Grab FL GoM-DE heatmap as grob
+ht_grob_FL <- grid::grid.grabExpr({
+  ComplexHeatmap::draw(ht_FL2)
+  
+  grid.text("Phylum", 
+            x = unit(0.05, "npc"),  # tweak x
+            y = unit(0.03, "npc"),  # tweak y — top
+            gp = gpar(fontsize = 9, fontface = "bold"),
+            just = c("left", "bottom"))
+  
+  grid.text("Order", 
+            x = unit(0.75, "npc"),  # tweak x — right side
+            y = unit(0.03, "npc"),   # vertical center
+            gp = gpar(fontsize = 9, fontface = "bold"),
+            just = c("right", "bottom"))
+})
+
+
+pheat2<-pheat+labs(title=expression(bold("B")*""))
+p_swarm_pie2<-p_swarm_pie+labs(title=expression(bold("C")*""))
+
+# Stack B and C on the right
+right_col <- plot_grid(
+  pheat2,  # panel B
+  p_swarm_pie2,        # panel C
+  nrow = 2,
+  rel_heights = c(1, 1)  # B is shorter, C taller
+)
+
+# Combine A (left) and B/C stack (right)
+gomde_fl <- plot_grid(
+  ht_grob_FL, right_col,
+  ncol = 2,
+  align = "h",
+  axis = "tb",
+  rel_widths = c(1, 1)  # GoM-DE wider, adjust to taste
+)
+
+ggsave("output/plots/FL/GomDE_summary.pdf", gomde_fl, width = 14, height = 12, units = "in",dpi=600)
+
+gomde_fl
+```
+
+
+
+## Env associations
+```{r}
+# Combine all blocks
+limma_all <- bind_rows(
+  sig_limma_clr_FL  %>% mutate(Block = "FL"),
+  sig_limma_clr_PA  %>% mutate(Block = "PA"),
+  sig_limma_clr_SSF %>% mutate(Block = "SSF"),
+  sig_limma_clr_LSF %>% mutate(Block = "LSF")
+) %>%
+  mutate(Block = factor(Block, levels = c("FL", "PA", "SSF", "LSF")))
+
+# Summarise per block × env variable
+limma_summary <- limma_all %>%
+  group_by(Block, term) %>%
+  summarise(
+    n_sig = n(),  # number of SCs with significant association
+    mean_t = mean(t, na.rm = TRUE),  # dominant direction
+    .groups = "drop"
+  ) %>%
+  mutate(
+    direction_label = ifelse(mean_t > 0, "Positive", "Negative")
+  ) %>%
+  left_join(meta_names, by = c("term" = "original")) %>%
+  mutate(term = coalesce(new, term))
+
+# Plot
+p_limma_summary <- ggplot(limma_summary,
+                          aes(x = Block, y = term)) +
+  geom_point(aes(size = n_sig, color = direction_label), alpha = 0.9) +
+  scale_color_manual(values = c("Positive" = "#E65100",
+                                 "Negative" = "#1565C0"),
+                     name = "Dominant\ndirection") +
+  scale_size_continuous(range = c(3, 10),
+                        name = "Number of \n sig. SCs") +
+  scale_x_discrete(limits = c("FL", "PA", "SSF", "LSF")) +
+  labs(x = NULL, y = NULL,
+       title = expression(bold("A") * " Limma Observed Associations")) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.major = element_line(color = "grey92"),
+        panel.grid.minor = element_blank())
+
+p_limma_summary 
+```
+
+
+
+```{r}
+# Combine all blocks
+rf_perf_all <- bind_rows(
+  results_clr_FL$rf_perf  %>% mutate(Block = "FL"),
+  results_clr_PA$rf_perf  %>% mutate(Block = "PA"),
+  results_clr_SSF$rf_perf %>% mutate(Block = "SSF"),
+  results_clr_LSF$rf_perf %>% mutate(Block = "LSF")
+) %>%
+  mutate(Block = factor(Block, levels = c("FL", "PA", "SSF", "LSF")))
+
+# Block means
+rf_means <- rf_perf_all %>%
+  group_by(Block) %>%
+  summarise(mean_R2 = mean(R2))
+
+rf_means 
+
+# Plot
+p_q2 <- ggplot(rf_perf_all, aes(y = R2, x = Block, color = Block)) +
+  geom_jitter(height = 0.15, size = 2.5, alpha = 0.7) +
+  geom_crossbar(data = rf_means,
+                aes(y = mean_R2, ymin = mean_R2, ymax = mean_R2),
+                width = 0.5, linewidth = 0.5) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(limits = c("FL", "PA", "SSF", "LSF")) +
+  scale_color_manual(values = sf_colors2) +
+  labs(x = NULL, title = expression(bold("B") * " RF Prediction Power"),
+       y = expression(Q^2 ~ "(OOB " * R^2 * ")")) +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "none",
+        panel.grid.major.x = element_blank())
+
+p_q2
+
+```
+```{r}
+# Combine all blocks
+shap_all <- bind_rows(
+  shap_dir_FL  %>% mutate(Block = "FL"),
+  shap_dir_PA  %>% mutate(Block = "PA"),
+  shap_dir_SSF %>% mutate(Block = "SSF"),
+  shap_dir_LSF %>% mutate(Block = "LSF")
+) %>%
+  mutate(Block = factor(Block, levels = c("FL", "PA", "SSF", "LSF")))
+
+shap_summary <- shap_all %>%
+  mutate(direction_num = case_when(
+    direction == "+" ~ 1,
+    direction == "-" ~ -1,
+    TRUE ~ NA_real_
+  )) %>%
+  group_by(Block, Env) %>%
+  summarise(
+    mean_imp  = mean(imp_scaled, na.rm = TRUE),
+    prop_pos  = mean(direction_num == 1, na.rm = TRUE),
+    n_topics  = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    dom_dir = case_when(
+      prop_pos >= 0.70 ~ "+",
+      prop_pos <= 0.30 ~ "−",
+      TRUE ~ ""  # no dominant direction, leave blank
+    )
+  )
+
+shap_plot <- shap_summary %>% 
+  filter(show) %>%
+  mutate(direction_label = ifelse(dir_color == "#E65100", 
+                                   "Positive", "Negative")) %>%
+  left_join(meta_names, by = c("Env" = "original")) %>%
+  mutate(Env = coalesce(new, Env)) %>%
+  mutate(Env = droplevels(factor(Env, levels = new_order)))
+
+env_order <- shap_plot %>%
+  group_by(Env) %>%
+  summarise(total_imp = sum(mean_imp)) %>%
+  arrange(total_imp) %>%
+  pull(Env)
+
+p_drivers <- ggplot(shap_plot, 
+                    aes(x = Block, y = Env)) +
+  geom_point(aes(color = direction_label, size = mean_imp), alpha = 0.9) +
+  #geom_text(aes(label = dom_dir), 
+  #          color = "white", size = 3.5, fontface = "bold") +
+  scale_color_manual(values = c("Positive" = "#E65100", 
+                                 "Negative" = "#1565C0"),
+                     name = "Dominant\ndirection") +
+  scale_size_continuous(range = c(5, 14), 
+                        name = "Mean importance\n(scaled)") +
+  scale_x_discrete(limits = c("FL", "PA", "SSF", "LSF")) +
+  scale_y_discrete(limits = env_order) +
+  labs(x = NULL, y = NULL, title = expression(bold("C") * " Predictive Importance")) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.major = element_line(color = "grey92"),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 0, hjust = 0.5))
+
+p_drivers 
+```
+
+
+```{r}
+p<-ggpubr::ggarrange(p_limma_summary,p_q2, p_drivers,
+                                 ncol = 3, nrow = 1, widths = c(1,.75,1))
+
+ggsave("output/plots/ALL/meta_stats.pdf", p, width = 15, height = 6, units = "in",dpi=600)
+p
+```
+
+
+## Distribution and entropy
+### ASV
+```{r}
+ASV_distribution<- function(name, df, cutoff){
+  #filter
+  df_clean<- df %>% 
+    filter (value > cutoff) %>% 
+    group_by(ASV) %>% 
+    dplyr::summarise(n_topics=n_distinct(topic)) %>% 
+    ungroup() %>% 
+    arrange(n_topics) %>% 
+    mutate(sf=name)
+  
+  p<-ggplot(df_clean, aes(x=n_topics)) + 
+    geom_bar()+
+    theme_bw()+
+    labs(x="found in this # of SCs", y="ASVs", title=paste(name, cutoff))+
+    scale_x_continuous(breaks = seq(min(df_clean$n_topics), max(df_clean$n_topics), by = 1))
+  
+  print(p)
+  
+   return(df_clean)
+}
+
+#ASV_distribution("PA",A_long_PA, 0.0001)
+ASV_distribution("SSF_Chloro",A_long_SSF, 0.0001)
+```
+
+```{r}
+fl_asvs_dist<-ASV_distribution("FL_Prok",A_long_FL, 0.0001)
+pa_asvs_dist<-ASV_distribution("PA_Prok",A_long_PA, 0.0001)
+
+ssf_asvs_dist<-ASV_distribution("SSF_Chloro",A_long_SSF, 0.0001)
+lsf_asvs_dist<-ASV_distribution("LSF_Chloro",A_long_LSF, 0.0001)
+
+join<-rbind(fl_asvs_dist,pa_asvs_dist,ssf_asvs_dist,lsf_asvs_dist)
+
+#bacuse not all are observed
+max_values <- c(FL_Prok = 10, PA_Prok = 10, SSF_Chloro = 9, LSF_Chloro = 11)
+
+ecdf_data <- join %>%
+  group_by(sf, n_topics) %>%
+  dplyr::summarise(n = n(), .groups = "drop") %>%
+  group_split(sf) %>%
+  map_dfr(function(df_sf) {
+    sf_name <- unique(df_sf$sf)
+    df_sf %>%
+      complete(n_topics = 1:max_values[[sf_name]], fill = list(n = 0)) %>%
+      arrange(n_topics) %>%
+      mutate(
+        sf = sf_name,
+        cdf = cumsum(n) / sum(n)
+      )}) %>% 
+  mutate(sf=factor(sf,levels=names(max_values)))
+
+points <- ecdf_data %>%
+  filter(n_topics %in% c(1,9))
+points_adjusted <- points %>%
+  filter(n_topics %in% c(9)) %>%
+  mutate(cdf_adj = cdf + c(-.02,-.04,-.06,-.08)[as.numeric(factor(sf))])
+
+p_asvs<- ggplot(ecdf_data, aes(x = n_topics, y = cdf, color = sf)) +
+  geom_line(size = .5) +
+  geom_point(size = 3, alpha=.7) +
+  theme_bw() +
+  labs(
+    x = "# of SCs containing each ASV",
+    y = "Cumulative Fraction of ASVs",
+    color = "Dataset\n(p>0.0001)",
+    title = expression(bold("B") ~ "")) + #ASV Distribution Across SCs
+  theme(
+    legend.title = element_text(face = "bold"),
+    legend.position = c(0.8, 0.3))+
+  scale_x_continuous(breaks = seq(min(join$n_topics), 13, by = 1))+
+  scale_y_continuous(breaks = seq(0, 1, by = 0.1)) +
+  scale_color_manual(values=sf_colors)+
+  geom_text(
+    data = subset(points,n_topics ==1),
+    aes(label = n),
+    hjust = 1.2, vjust = 0.5,
+    size = 3,
+    show.legend = FALSE)+
+  geom_text(
+      data = points_adjusted,
+      aes(x = n_topics, y = cdf_adj, label = n, color = sf),
+      hjust = -0.1,
+      size = 3,
+      show.legend = FALSE)+
+  annotate("text", 
+         x = .7, y = 0.6, 
+         label = "n=", 
+         size = 3, fontface = "bold", color = "black", hjust = 0)+
+  guides(color="none")
+
+p_asvs
+```
+
+### Samples
+```{r}
+sample_distribution<- function(name, df, cutoff){
+  
+  # reshape
+  df$sample <- rownames(df) 
+  
+  df_long <- df %>%
+    pivot_longer(
+      cols = where(is.numeric),    
+      names_to = "topic",
+      values_to = "value"
+    )
+  
+  # Reorder columns
+  df_long <- df_long %>% select(sample, topic, value)
+  
+  # filter
+  df_clean <- df_long %>% 
+    filter(value > cutoff) %>% 
+    group_by(sample) %>% 
+    dplyr::summarise(n_topics = n_distinct(topic)) %>% 
+    ungroup() %>% 
+    arrange(n_topics) %>% 
+    mutate(sf = name)
+  
+  p <- ggplot(df_clean, aes(x = n_topics)) + 
+    geom_bar() +
+    theme_bw() +
+    labs(x = "found in this # of SCs", y = "samples", title = paste(name, cutoff)) +
+    scale_x_continuous(breaks = seq(min(df_clean$n_topics), max(df_clean$n_topics), by = 1))
+  
+  print(p)
+  
+  return(df_clean)
+  
+}
+
+sample_distribution("FL",W_FL, 0.01)
+#sample_distribution("LSF",W_LSF, 0.01)
+```
+
+```{r}
+fl_sample_dist<-sample_distribution("FL_Prok",W_FL, 0.01)
+pa_sample_dist<-sample_distribution("PA_Prok",W_PA, 0.01)
+
+ssf_sample_dist<-sample_distribution("SSF_Chloro",W_SSF, 0.01)
+lsf_sample_dist<-sample_distribution("LSF_Chloro",W_LSF, 0.01)
+
+join<-rbind(fl_sample_dist,pa_sample_dist,ssf_sample_dist,lsf_sample_dist)
+
+#bacuse not all are observed
+max_values <- c(FL_Prok = 10, PA_Prok = 10, SSF_Chloro = 9, LSF_Chloro = 11)
+
+ecdf_data <- join %>%
+  group_by(sf, n_topics) %>%
+  dplyr::summarise(n = n(), .groups = "drop") %>%
+  group_split(sf) %>%
+  map_dfr(function(df_sf) {
+    sf_name <- unique(df_sf$sf)
+    df_sf %>%
+      complete(n_topics = 1:max_values[[sf_name]], fill = list(n = 0)) %>%
+      arrange(n_topics) %>%
+      mutate(
+        sf = sf_name,
+        cdf = cumsum(n) / sum(n)
+      )}) %>% 
+  mutate(sf=factor(sf,levels=names(max_values)))
+
+p_samples<- ggplot(ecdf_data, aes(x = n_topics, y = cdf, color = sf)) +
+  geom_line(size = .5) +
+  geom_point(size = 3, alpha=.7) +
+  theme_bw() +
+  labs(
+    x = "# of SCs observed in each sample",
+    y = "Cumulative Fraction of Samples",
+    color = "Dataset\n", #(p>0.01)
+   title = expression(bold("C") ~ " ")) + #SC distribution across samples
+  theme(
+    legend.title = element_text(face = "bold"),
+    legend.position = c(0.8, 0.3))+
+  scale_x_continuous(breaks = seq(min(join$n_topics), 13, by = 1))+
+  scale_y_continuous(breaks = seq(0, 1, by = 0.1)) +
+  scale_color_manual(values=sf_colors)
+
+
+p_samples
+```
+
+
+### Entropy
+Higher entropy in a region (FL or PA) → May indicate an environment with greater microbial interaction, more functional redundancy, or dynamic shifts in community structure.
+
+Lower entropy → Suggests strong environmental filtering, where certain conditions select for specific microbial groups, leading to more stable and distinct sub-communities.
+
+```{r}
+library(entropy)  # Install with install.packages("entropy") if needed
+```
+
+```{r}
+# Function to compute Shannon entropy for each row (document)
+compute_entropy <- function(topic_matrix) {
+  apply(topic_matrix, 1, function(probabilities) {
+    probabilities <- probabilities[probabilities > 0]  # Remove zero probabilities (to avoid log(0))
+    -sum(probabilities * log(probabilities, base = 2))  # Shannon entropy formula
+  })
+}
+
+# Compute entropy for each dataset
+FL_entropy <- compute_entropy(W_FL)
+PA_entropy <- compute_entropy(W_PA)
+SSF_entropy <- compute_entropy(W_SSF)
+LSF_entropy <- compute_entropy(W_LSF)
+
+# Create a combined data frame for plotting
+entropy_df <- data.frame(
+  Entropy = c(FL_entropy, PA_entropy, SSF_entropy, LSF_entropy),
+  Dataset = rep(c("FL_Prok", "PA_Prok", "SSF_Chloro", "LSF_Chloro"), 
+                c(length(FL_entropy), length(PA_entropy), length(SSF_entropy), length(LSF_entropy)))
+)
+
+entropy_df$Dataset<-factor(entropy_df$Dataset, levels=c("FL_Prok", "PA_Prok", "SSF_Chloro", "LSF_Chloro"))
+
+# Compute summary statistics (mean and standard deviation)
+summary_df <- entropy_df %>%
+  group_by(Dataset) %>%
+  dplyr::summarise(
+    MeanEntropy = mean(Entropy),
+    SdEntropy = sd(Entropy)
+  )
+
+# Convert summary stats to text labels
+summary_df <- summary_df %>%
+  mutate(Label = paste0("Mean: ", round(MeanEntropy, 2), "\nSD: ", round(SdEntropy, 2)))
+
+
+# Plot using ggplot with facet_wrap() for subplots
+p_ent<-ggplot(entropy_df, aes(x=Entropy, fill=Dataset, color=Dataset)) +
+  geom_density(alpha=0.6) +
+  labs(x="Shannon Entropy Across Dataset", y="Density",
+       title = expression(bold("D") ~ "")) + #Entropy of Sample Subcommunity Composition
+  theme_minimal() +
+  theme(
+    legend.position = c(0.9, 0.7),
+    plot.title = element_text(face = "bold", size = 14),
+    strip.text = element_text(face = "bold"))+
+  scale_fill_manual(values=sf_colors) + 
+  scale_color_manual(values=sf_colors) +
+  #facet_wrap(~ Dataset)+
+  guides(color="none", fill="none")+
+  geom_text(data=subset(summary_df,Dataset == "FL_Prok"), 
+            aes(x=2.1, y=.8, label=Label), color="#1f78b4", size=4, inherit.aes=FALSE)+
+  geom_text(data=subset(summary_df,Dataset == "PA_Prok"), 
+            aes(x=1, y=.75, label=Label), color="#b15928", size=4, inherit.aes=FALSE)+
+  geom_text(data=subset(summary_df,Dataset == "SSF_Chloro"), 
+            aes(x=0.2, y=.65, label=Label), color="#33a02c", size=4, inherit.aes=FALSE)+
+  geom_text(data=subset(summary_df,Dataset == "LSF_Chloro"), 
+            aes(x=2.6, y=.3, label=Label), color="#00441b", size=4, inherit.aes=FALSE)
+p_ent
+```
+```{r}
+# Perform KS tests
+ks_FL_PA <- ks.test(FL_entropy, PA_entropy)  # FL vs. PA
+ks_SSF_LSF <- ks.test(SSF_entropy, LSF_entropy)  # SSF vs. LSF
+
+# Print results
+cat("Kolmogorov-Smirnov Test Results:\n")
+cat("FL vs. PA: D =", ks_FL_PA$statistic, ", p-value =", ks_FL_PA$p.value, "\n")
+cat("SSF vs. LSF: D =", ks_SSF_LSF$statistic, ", p-value =", ks_SSF_LSF$p.value, "\n")
+
+```
+### gather
+```{r}
+figure <-  ggpubr::ggarrange(p_asvs,p_samples,p_ent, ncol = 3, nrow = 1,
+                             align = "h",heights = c(1, 1, 1),hjust = -0.1)
+
+figure<-annotate_figure(figure,
+                top = text_grob("", color = "black", face = "bold", size = 14))
+
+ggsave(file=paste("output/plots/ALL/distribution_and_entropy.pdf",sep=''), figure,
+       width = 15, height = 5, units = "in",dpi=1000)
+
+figure
+```
+
+## GCA
+```{r}
+library(geigen)
+library(pracma)
+library(VGAM)
+library(compositions)
+```
+
+
+### combine
+We can only run with samples found in all datastes. 
+A decision I am making is to make FL the master set, it was our first set and PA samples where processed based on FL.
+Then SSF and LSF come from both FL and PA so wherever we dont have obs is not that we didn't sample its that there are no chloroplast reads so I am creating an absent topic.
+
+- master sample list is the FL samples
+- combine blocks, fill missing topics with 1 PER BLOCK
+
+```{r}
+combine_all <- function(){
+  "wrap in a function so we don't mess up our main tables"
+  
+  # helper to prefix numeric topic columns -- 
+  add_prefix <- function(df, prefix){
+    df %>% rename_with(~ paste0(prefix, "_", .), where(is.numeric))
+  }
+  
+  # FL
+  FL <- W_FL %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var = "Sample_num") %>%
+    add_prefix("FL")
+  
+  # SSF
+  SSF <- W_SSF %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var = "Sample_num") %>%
+    add_prefix("SSF")
+  
+  # PA ID lookup
+  PA_ids <- PA_meta %>% select(Sample_num, ssf_id)
+  
+  # PA
+  PA <- W_PA %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var = "Sample_num") %>%
+    add_prefix("PA") %>%
+    left_join(PA_ids, by = "Sample_num") %>%
+    select(-Sample_num) %>%
+    dplyr::rename(Sample_num = ssf_id)
+  
+  # LSF
+  LSF <- W_LSF %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var = "Sample_num") %>%
+    add_prefix("LSF") %>%
+    left_join(PA_ids, by = "Sample_num") %>%
+    select(-Sample_num) %>%
+    dplyr::rename(Sample_num = ssf_id)
+  
+  # combine all
+  all_wide <- FL %>%
+    left_join(PA,  by = "Sample_num") %>%
+    left_join(SSF, by = "Sample_num") %>%
+    left_join(LSF, by = "Sample_num")
+  
+  return(all_wide)
+}
+
+all_wide <- combine_all()
+all_wide
+
+```
+
+
+```{r}
+add_missing_topic <- function(df, prefix) {
+  # all columns that start with "PA_", "SSF_", "LSF_", etc.
+  topic_cols <- grep(paste0("^", prefix, "_"), names(df), value = TRUE)
+  
+  # don't treat existing *_0 as part of the set (in case you call it twice)
+  topic_cols <- setdiff(topic_cols, paste0(prefix, "_0"))
+  
+  new_col <- paste0(prefix, "_0")
+  
+  df %>%
+    rowwise() %>%
+    mutate(
+      !!new_col := if_else(
+        all(is.na(c_across(all_of(topic_cols)))),  # all topics NA for this block?
+        1,                                         # yes → in "missing topic"
+        0                                          # no  → not missing
+      )
+    ) %>%
+    ungroup() %>%
+    mutate(
+      across(all_of(topic_cols), ~ replace_na(.x, 0))
+    )
+}
+```
+
+```{r}
+all_wide2 <- all_wide %>%
+  add_missing_topic("PA") %>%
+  add_missing_topic("SSF") %>%
+  add_missing_topic("LSF")
+
+#clean
+all_wide2 <- all_wide2 %>% 
+  filter(PA_0 !=1) %>% #this is the PA fraction not in FL - this will also drop samples from LSF
+  select(-PA_0)
+  
+
+all_wide2
+```
+
+```{r}
+print(sum(all_wide2$SSF_0)) #samples from FL without euks
+print(sum(all_wide2$LSF_0)) #samples from FL+PA without euks
+```
+
+### prep blocks
+```{r}
+# Standardize environmental data (M)
+M_FL_scaled <- FL_meta %>% 
+  filter(Sample_num %in% all_wide2$Sample_num) %>% 
+  select(all_of(keep)) %>%         ## keep is defined in FL prep_meta
+  mutate(across(everything(), ~replace_na(.x, 0))) %>% 
+  mutate(across(everything(), ~ .x + 1)) %>% 
+  mutate(across(everything(), scale)) %>% 
+  mutate(across(everything(), as.numeric)) 
+M_FL_scaled <- as.data.frame(M_FL_scaled)
+M_FL_scaled
+```
+```{r}
+FL_block  <- all_wide2 %>% select(starts_with("FL_"))  %>% as.matrix()
+PA_block  <- all_wide2 %>% select(starts_with("PA_"))  %>% as.matrix()
+SSF_block <- all_wide2 %>% select(starts_with("SSF_")) %>% as.matrix()
+LSF_block <- all_wide2 %>% select(starts_with("LSF_")) %>% as.matrix()
+
+add_rownames <- function(transformed, original){
+  rownames(transformed) <- rownames(original)
+  transformed
+}
+
+dataset_list <- list(
+  FL  = add_rownames(ilr(FL_block),  FL_block),
+  PA  = add_rownames(ilr(PA_block),  PA_block),
+  SSF = add_rownames(ilr(SSF_block), SSF_block),
+  LSF = add_rownames(ilr(LSF_block), LSF_block),
+  Env = M_FL_scaled
+)
+```
+
+
+### GCA function 
+What are the major ecological axes that simultaneously structure prokaryotic (FL/PA) and eukaryotic (SSF/LSF) topics AND correlate with environmental gradients?
+```{r}
+#the goal is to prioritize variation shared across ALL blocks not just high noise within one block 
+
+compute_gca <- function(dataset_list, nb_components = 2, scale = FALSE, lambda=10) {
+  # Compute generalized canonical analysis
+  # dataset_list: list of datasets to analyze
+  # nb_components: number of components to compute
+  
+  ### Step 1: append all datasets
+  dim_list <- unlist(lapply(dataset_list, ncol))
+  
+  if (scale) {
+    ### Usually a bit better to scale the data
+    dataset_list <- lapply(dataset_list, scale)
+  }else{
+    dataset_list <- lapply(dataset_list, as.matrix)
+  }
+  full_data <- bind_cols(dataset_list)
+  #Sigma is the global covariance matrix across all variables in all blocks.
+  Sigma  <- cov(full_data)
+  #Sigma0 = covariance only within each block, NO cross-block covariance <- represents where blocks are independent 
+  Sigma0 <- matrix(0, nrow = sum(dim_list), ncol = sum(dim_list))
+  for (i in 1:length(dataset_list)){
+    #### fill in the covariance matrix (block wise)
+    a = ifelse(i==1, 1, sum(dim_list[1:(i-1)])+1)
+    b = sum(dim_list[1:i])
+    Sigma0[a:b, a:b] <- cov(dataset_list[[i]])
+  }
+  
+  ### Step 2: compute the generalized eigenvalue problem
+  sq_0 = pracma::sqrtm(Sigma0 + lambda * diag(rep(1, ncol(Sigma0))), kmax=100)  
+  #goal is to make blocsk comparable to each other by minimizing their own variance 
+
+  Sigma0_sqrt_inv <- sq_0$Binv
+  
+  #solve the eigne this is where cross-block covariance is high AND within-block covariance is low.
+  res <- eigen(Sigma0_sqrt_inv  %*% Sigma  %*% Sigma0_sqrt_inv)
+ 
+   ####  compute the canonical vectors
+  A = Sigma0_sqrt_inv%*% res$vectors[,1:nb_components]
+  results <- list()
+  results[["canonical_vectors"]] <- list()
+
+  for (i in seq_along(dataset_list)) {
+    a <- ifelse(i == 1, 1, sum(dim_list[1:(i-1)]) + 1)
+    b <- sum(dim_list[1:i])
+    results[["canonical_vectors"]][[i]] <- A[a:b,]
+  }
+  
+  # Initialize another list inside results
+  results[["canonical_variates"]] <- list()
+  
+  for (i in seq_along(dataset_list)) {
+    a <- ifelse(i == 1, 1, sum(dim_list[1:(i-1)]) + 1)
+    b <- sum(dim_list[1:i])
+    results[["canonical_variates"]][[i]] <- dataset_list[[i]] %*% A[a:b,]
+  }
+  
+  results[['correlations']] = res$values
+  results[['prop_variance_explained']]= res$values/sum(res$values)
+  return(results)
+}
+
+```
+
+```{r}
+gca_out <- compute_gca(
+  dataset_list,
+  nb_components = 5,
+  scale = TRUE,   # usually reasonable since these are probabilities
+)
+names(gca_out)
+```
+
+#### Loadings
+```{r}
+prop_df <- tibble(
+  component = seq_along(gca_out$prop_variance_explained),
+  prop = gca_out$prop_variance_explained
+)
+
+ggplot(prop_df, aes(x = factor(component), y = prop)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = scales::percent(prop, accuracy = 0.1)),
+            vjust = -0.5, size = 3) +
+  labs(x = "Component", y = "Proportion of Shared Variance Explained",
+       title = "GCA Scree Plot") +
+  theme_minimal()
+```
+```{r}
+groups <- c("FL", "PA", "SSF", "LSF", "Env")
+
+variates_list <- lapply(seq_along(groups), function(i) {
+  df <- as.data.frame(gca_out$canonical_variates[[i]])
+  
+  # give component names
+  colnames(df) <- c("GCA1", "GCA2", "GCA3", "GCA4", "GCA5")
+  
+  # add block label
+  df$Group <- groups[i]
+  
+  # create sample index (1–678)
+  df$Sample_num <- seq_len(nrow(df))
+  
+  df
+})
+
+# combine all blocks
+variates_df <- do.call(rbind, variates_list)
+
+## add back sample names
+M_FL_scaled$Sample_num <- seq_len(nrow(M_FL_scaled))
+variates_df <- left_join(variates_df, M_FL_scaled, by = "Sample_num")
+variates_df$Sample_num<-rownames(M_FL_scaled)
+M_FL_scaled<-M_FL_scaled %>% select(-Sample_num)
+
+#add cat meta
+cat_meta<- FL_meta %>% select(Sample_num, YEAR, SEASON, lake,new_depths_mdh2,layer_name2 )
+variates_df<- variates_df %>% left_join(cat_meta, by = "Sample_num")
+
+head(variates_df)
+```
+```{r}
+block_contrib <- variates_df %>%
+  group_by(Group) %>%
+  summarise(
+    GCA1 = mean(abs(GCA1), na.rm = TRUE),
+    GCA2 = mean(abs(GCA2), na.rm = TRUE),
+    GCA3 = mean(abs(GCA3), na.rm = TRUE),
+    GCA4 = mean(abs(GCA4), na.rm = TRUE),
+    GCA5 = mean(abs(GCA5), na.rm = TRUE),
+    n    = n(),
+    .groups = "drop"
+  )
+
+block_contrib
+
+p_blocks<- block_contrib %>%
+  pivot_longer(
+    cols = starts_with("GCA"),
+    names_to = "Axis",
+    values_to = "MeanAbsLoading"
+  ) %>%
+  filter(Axis %in% c("GCA1", "GCA2","GCA3","GCA4","GCA5")) %>%
+  mutate(Group=factor(Group, levels=c("Env","FL","SSF","PA","LSF"))) %>% 
+  ggplot(aes(x = Group, y = MeanAbsLoading, fill = Axis)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c(
+    "GCA1" = "#0072B2",  # blue
+    "GCA2" = "#E69F00",  # amber
+    "GCA3" = "#009E73",  # teal-green
+    "GCA4" = "#CC79A7",   # pink-purple
+    "GCA5" = "darkred"
+  )) +
+  theme_classic() +
+  labs(
+    y = "Mean |Canonical Variate|",
+    title = expression(bold("A") * "")
+  ) +
+  guides(fill = guide_legend(ncol = 4))+
+  theme(
+    legend.position = c(0.4, 0.92),        # x, y in 0-1 plot coordinates
+    legend.background = element_rect(fill = "white", color = "grey80"),
+    legend.margin = margin(4, 6, 4, 6)
+  )
+
+#ggsave("../output/plots/Multiple/GCA_block_contributions.png",p, width = 5, height = 4, units = "in", dpi = 600)
+
+p_blocks
+```
+
+#### Canonical vectors  
+```{r}
+#Extract env canonical vectors (block 5)
+env_vec <- as.data.frame(gca_out$canonical_vectors[[5]])
+
+# Name the columns for the GCA components
+colnames(env_vec) <- paste0("GCA", seq_len(ncol(env_vec)))
+
+# Add variable names as a column
+env_vec$variable <- colnames(M_FL_scaled)
+
+# Reshape to long format for faceting
+env_long <- env_vec %>%
+  pivot_longer(cols = starts_with("GCA"),
+               names_to = "Component",
+               values_to = "Loading")
+
+env_12 <- env_long %>% 
+  filter(Component %in% c("GCA1", "GCA2","GCA3","GCA4","GCA5")) %>%  #
+  group_by(Component) %>%
+  mutate(
+    abs_loading = abs(Loading),
+    highlight = abs_loading %in% sort(unique(abs_loading), decreasing = TRUE)[1:3]
+  ) %>%
+  ungroup()
+
+## we need to do this becayse here light is not in logit transformation
+meta_names<-read.csv("/Volumes/mlcoleman/project/greatlakes/Env_Metadata/meta_names.csv")
+param_order2 <- sub("estimated_light_logit", "estimated_light_pcnt", param_order)
+new_order2 <- meta_names$new[match(param_order2, meta_names$original)]
+
+keep2=c("Alkalinity..Total.as.CaCO3_mg.l","Chlorophyll.a_ug.l",
+       "Nitrogen..Total.Oxidized_mg.l","CTD_TEMP", "estimated_light_pcnt","Phosphorus..Total.as.P_ug.l",
+      "Silica..Dissolved.as.Si_mg.l","Turbidity_NTU", "abs_depth_m", "STN_DEPTH_M", 
+      "sbeox0Mg.L", "airT_14d_mean")
+
+env_12B <- env_12 %>%
+  filter(variable %in% keep2) %>% 
+  left_join(meta_names, by = c("variable" = "original")) %>%
+  mutate(variable = coalesce(new, variable))  %>% 
+  mutate(variable= factor(variable, levels = new_order2))
+
+p_loadings_env <- ggplot(env_12B, 
+       aes(x = variable, y = Loading, 
+           fill = highlight, color = highlight, linewidth = highlight)) +
+  geom_col() +
+  scale_fill_manual(values = c("FALSE" = alpha("steelblue", 0.4), 
+                               "TRUE"  = alpha("steelblue", 1.0))) +
+  scale_color_manual(values = c("FALSE" = alpha("steelblue", 0.4), 
+                                "TRUE"  = "steelblue4")) +
+  scale_linewidth_manual(values = c("FALSE" = 0.2, 
+                                    "TRUE"  = 0.8)) +
+  coord_flip() +
+  facet_wrap(Component ~., ncol = 5) +
+  labs(
+    title = expression(bold("B") * ""),
+    x = "Environmental Variable",
+    y = "Loading") +
+  theme_minimal(base_size = 13) +
+  guides(fill = "none", color = "none", linewidth = "none")
+
+#ggsave("/output/plots/Multiple/GCA_env_loadingss.png",p, width = 4, height = 6, units = "in", dpi = 600)
+
+p_loadings_env
+```
+
+#### odinations -- fix light
+```{r}
+clean_variates<-subset(variates_df,Group != "Env")
+clean_variates
+```
+
+```{r}
+#the arrows
+top_vars <- env_12 %>%
+  dplyr::filter(highlight) %>%
+  dplyr::distinct(variable)
+
+env_arrows <- env_vec %>%
+  dplyr::semi_join(top_vars, by = "variable") %>%
+  dplyr::select(variable, GCA1, GCA2)
+
+#some scaling
+# rough scale based on spread of scores
+range_x <- range(variates_df$GCA1, na.rm = TRUE)
+range_y <- range(variates_df$GCA2, na.rm = TRUE)
+arrow_scale <- 2 * max(diff(range_x), diff(range_y))   # tweak factor if needed
+
+env_arrows_scaled <- env_arrows %>%
+  mutate(
+    xend = GCA1 * arrow_scale,
+    yend = GCA2 * arrow_scale
+  ) %>% left_join(meta_names, by = c("variable" = "original")) %>%
+  mutate(variable = coalesce(new, variable)) 
+
+env_arrows_scaled <- env_arrows_scaled %>%
+  mutate(vec_length = sqrt(GCA1^2 + GCA2^2)) %>%
+  filter(vec_length > quantile(vec_length, 0.2))  # keep above the X percentile
+
+env_arrows_scaled 
+```
+
+
+
+```{r}
+p_lake<- ggplot(clean_variates, aes(GCA1, GCA2, color = lake)) +
+  scale_color_manual(values=lake_colors)+
+  geom_point(alpha = 0.8,size=3) +
+  geom_vline(xintercept = 0, color = "gray60", linewidth = 0.4,linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "gray60", linewidth = 0.4,linetype = "dashed") +
+  theme_bw()+
+  facet_wrap(.~Group)+
+  # environmental arrows (from origin)
+  geom_segment(data = env_arrows_scaled, #subset(env_arrows_scaled, variable %in% params_wanted)
+               aes(x = 0, y = 0, xend = xend, yend = yend),
+               inherit.aes = FALSE,
+               arrow = arrow(length = unit(0.2, "cm")),
+               linewidth = 0.8,
+               color = "black") +
+  
+  # labels for env vectors
+  ggrepel::geom_label_repel(
+  data = env_arrows_scaled,
+  aes(x = xend , y = yend , label = variable),
+  inherit.aes   = FALSE,
+  color         = "white",
+  fill      = "#2C2C2C",
+  fontface  = "bold",
+  alpha = 0.7,
+  size          = 5,
+  box.padding   = 0.5,
+  point.padding = 0.3,
+  segment.color = "black",
+  segment.size  = 0.3,
+  max.overlaps  = Inf,
+  show.legend   = FALSE) +
+  labs(color="Lake",title=expression(bold("B") * ""),
+       x = "GCA1 (16.3%)",
+  y = "GCA2 (12.0%)")
+
+#ggsave("../output/plots/Multiple/GCA_lake.png", p, width = 10, height = 8, units = "in", dpi = 600)
+
+p_lake
+```
+```{r}
+p_strata<-ggplot(clean_variates, aes(GCA1, GCA2, color = new_depths_mdh2)) +
+  scale_color_manual(values=depth2_colors)+
+  #scale_shape_manual(values=lake_shapes)+
+  geom_point(alpha = 0.8,size=3) +
+  geom_vline(xintercept = 0, color = "gray60", linewidth = 0.4,linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "gray60", linewidth = 0.4,linetype = "dashed") +
+  theme_bw()+
+  facet_wrap(.~Group)+
+  # environmental arrows (from origin)
+  geom_segment(data = env_arrows_scaled,
+               aes(x = 0, y = 0, xend = xend, yend = yend),
+               inherit.aes = FALSE,
+               arrow = arrow(length = unit(0.2, "cm")),
+               linewidth = 0.8,
+               color = "black") +
+  
+  # labels for env vectors
+  ggrepel::geom_label_repel(
+  data = env_arrows_scaled,
+  aes(x = xend , y = yend , label = variable),
+  inherit.aes   = FALSE,
+  color         = "white",
+  fill      = "#2C2C2C",
+  fontface  = "bold",
+  alpha = 0.7,
+  size          = 5,
+  box.padding   = 0.5,
+  point.padding = 0.3,
+  segment.color = "black",
+  segment.size  = 0.3,
+  max.overlaps  = Inf,
+  show.legend   = FALSE) +
+  labs(color="Water Layer",
+       title=expression(bold("A") * ""),
+       x = "GCA1 (16.3%)",y = "GCA2 (12.0%)")
+
+#ggsave("../output/plots/Multiple/GCA_layer.png",p, width = 10, height = 8, units = "in", dpi = 600)
+
+p_strata
+```
+
+### GCA summary figure
+
+```{r}
+gca_out1 <- cowplot::plot_grid(
+  p_strata, p_lake,
+  ncol = 2, nrow = 1
+)
+
+ggsave("output/plots/ALL/gca_ord.pdf", gca_out1, width = 14, height = 8, units = "in",dpi=600)
+gca_out1
+
+gca_out2 <- cowplot::plot_grid(
+  p_blocks, p_loadings_env,
+  ncol = 1, nrow = 2
+)
+
+ggsave("output/plots/ALL/gca_summary.pdf", gca_out2, width = 10, height = 8, units = "in",dpi=600)
+gca_out2
+```
+
+
+## Heart Plots
+```{r}
+#install.packages("ggnewscale") 
+library(ggnewscale)
+```
+
+```{r}
+main_stations=c("SU18","SU17M","SU15","SU06","SU08M","SU01M",
+                "MI41M","MI27M","MI18M",
+                "HU54M","HU45M","HU15M",
+                "ER91M","ER78M","ER15M",
+                "ON33M","ON41","ON55M")
+
+# build the universal station_year levels from all metadata
+all_station_year_df <- bind_rows(
+  FL_meta  %>% select(STATION_ID, YEAR),
+  PA_meta  %>% select(STATION_ID, YEAR),
+  SSF_meta %>% select(STATION_ID, YEAR),
+  LSF_meta %>% select(STATION_ID, YEAR)
+) %>%
+  distinct() %>%
+  filter(STATION_ID %in% main_stations) %>%
+  mutate(YEAR = as.numeric(as.character(YEAR))) %>%  # <-- make sure it is numeric
+  arrange(factor(STATION_ID, levels = main_stations), YEAR) %>%
+  mutate(station_year = paste(STATION_ID, YEAR, sep = "_"))
+
+all_station_year <- all_station_year_df %>% pull(station_year)
+all_station_year
+```
+
+```{r}
+get_heart2 <- function(plot_title, name, df, meta, 
+                       value_num = 0.05, 
+                       shared_x_df = all_station_year_df,
+                       show_x = TRUE){
+  
+  layer <- unique(meta$new_depths_mdh2)[1]
+  
+  if (name == "FL"){
+    list_colors <- FL_colors
+  } else if (name == "PA"){
+    list_colors <- PA_colors
+  } else if (name == "SSF"){
+    list_colors <- SSF_colors
+  } else if (name == "LSF"){
+    list_colors <- LSF_colors
+  } else {
+    return("check inputs")
+  }
+  
+  # reshape
+  df$Sample_num <- rownames(df) 
+  df <- df %>% rename_with(~ paste0(name, "_", .), where(is.numeric))
+  
+  df_long <- df %>%
+    pivot_longer(cols = starts_with(name), names_to = "topic", values_to = "value")
+  
+  df_long <- df_long %>% 
+    select(Sample_num, topic, value) %>% 
+    filter((Sample_num %in% meta$Sample_num) & value > value_num) %>% 
+    left_join(meta, "Sample_num") %>% 
+    dplyr::select(STATION_ID, YEAR, topic, value) %>% 
+    mutate(STATION_ID = factor(STATION_ID, levels = main_stations),
+           YEAR = factor(YEAR, levels = 2012:2019),
+           station_year = paste(STATION_ID, YEAR, sep = "_"),
+           topic_num = as.numeric(gsub(".*_", "", topic)))
+  
+  # topic order
+  topic_levels <- df_long %>%
+    distinct(topic, topic_num) %>%
+    arrange(topic_num) %>%
+    pull(topic)
+  
+  # station_year order from shared_x_df
+  ordered_station_year <- shared_x_df %>% pull(station_year)
+  
+  # station breaks from shared_x_df
+  station_breaks <- shared_x_df %>%
+    group_by(STATION_ID) %>%
+    filter(YEAR == max(YEAR)) %>%
+    ungroup() %>%
+    mutate(x_pos = match(station_year, ordered_station_year) + 0.5)
+  
+  # apply factor levels
+  df_long <- df_long %>%
+    mutate(station_year = factor(station_year, levels = ordered_station_year),
+           topic = factor(topic, levels = topic_levels))
+
+  # lake color labels
+  lake_labels <- df_long %>%
+    distinct(station_year, STATION_ID) %>%
+    mutate(lake_code = substr(as.character(STATION_ID), 1, 2),
+           x = match(station_year, levels(df_long$station_year)))
+
+  p <- ggplot(df_long, aes(x = station_year, y = topic, size = value, fill = topic)) +
+    geom_vline(data = station_breaks, aes(xintercept = x_pos), 
+               linetype = "dashed", color = "grey40") +
+    geom_tile(aes(height = value), col = "transparent") +
+    scale_size_continuous(range = c(0.1, 5)) +
+    scale_fill_manual(values = list_colors) +
+    scale_x_discrete(drop = FALSE) +  # <-- keep all shared x levels
+    theme_bw() +
+    labs(x = "", y = "Subcommunity", size = "Value", title = plot_title) +
+    theme(
+      plot.margin = if (show_x) margin(1, 5, 1, 5) else margin(1, 5, -5, 5),
+      plot.title = element_text(size = 6, face = "bold"), 
+      panel.grid = element_blank(),
+      axis.text.x = if (show_x) element_text(angle = 90, hjust = 1, size = 5) else element_blank(),
+      axis.ticks.x = if (show_x) element_line() else element_blank(),
+      legend.position = "right") +
+    guides(fill = "none", size = "none") +
+    ggnewscale::new_scale_fill() +
+    geom_tile(data = lake_labels,
+              aes(x = x, y = -0.5, fill = lake_code), 
+              width = 1, height = 0.5,
+              inherit.aes = FALSE) +
+    scale_fill_manual(values = lake_colors) +
+    guides(fill = "none")
+  
+  return(p)
+}
+  
+wanted<-subset(PA_meta, new_depths_mdh2 == "Strat_EPI" & SEASON == "Summer")
+get_heart2("PA Prok Summer Strat_EPI (p>0.05)", "PA", W_PA, wanted, 
+           value_num = 0.1, shared_x_df = all_station_year_df)
+```
+###strat EPI
+```{r}
+"only show subcommunities contributing more than twice their fair share, so value_num =2/k"
+
+#FL
+wanted <- subset(FL_meta,  new_depths_mdh2 %in% c("Strat_EPI","Iso_EPI") & SEASON == "Summer")
+FL_epi  <- get_heart2("FL Prok",    "FL",  W_FL,  wanted, value_num = 3/ncol(W_FL), show_x = FALSE)
+
+#PA
+wanted <- subset(PA_meta,  new_depths_mdh2 %in% c("Strat_EPI","Iso_EPI") & SEASON == "Summer")
+PA_epi  <- get_heart2("PA Prok",    "PA",  W_PA,  wanted, value_num = 3/ncol(W_PA), show_x = FALSE)
+
+#SSF
+wanted <- subset(SSF_meta, new_depths_mdh2 %in% c("Strat_EPI","Iso_EPI") & SEASON == "Summer")
+SSF_epi <- get_heart2("SSF Chloro", "SSF", W_SSF, wanted, value_num = 3/ncol(W_SSF), show_x = FALSE)
+
+#LSF
+wanted <- subset(LSF_meta, new_depths_mdh2 %in% c("Strat_EPI","Iso_EPI") & SEASON == "Summer")
+LSF_epi <- get_heart2("LSF Chloro", "LSF", W_LSF, wanted, value_num = 3/ncol(W_LSF), show_x = TRUE)
+
+
+##save
+figure <-  ggpubr::ggarrange(FL_epi, PA_epi, SSF_epi,LSF_epi, ncol = 1, nrow = 4,
+                             align = "v",heights = c(1, 1, 1, 1.5),hjust = -0.1)
+
+figure<-annotate_figure(figure,
+                top = text_grob("Strat Epilimnion", color = "black", face = "bold", size = 14))
+
+ggsave(file=paste("output/plots/ALL/strat_epi.png",sep=''), figure,
+       width = 10, height = 12, units = "in",dpi=1000)
+
+figure
+```
+
+
+### Cold water
+```{r}
+###cold
+#FL
+wanted <- subset(FL_meta, new_depths_mdh2 %in% c("Strat_HYP","Iso_Bot","Iso_Top","Iso_Mid","InvS_EPI","InvS_HYP"))
+FL_cold  <- get_heart2("FL Prok",    "FL",  W_FL,  wanted, value_num = 3/ncol(W_FL),  show_x = FALSE)
+
+#PA
+wanted <- subset(PA_meta, new_depths_mdh2 %in% c("Strat_HYP","Iso_Bot","Iso_Top","Iso_Mid","InvS_EPI","InvS_HYP"))
+PA_cold  <- get_heart2("PA Prok",    "PA",  W_PA,  wanted, value_num = 3/ncol(W_PA),  show_x = FALSE)
+
+#SSF
+wanted <- subset(SSF_meta, new_depths_mdh2 %in% c("Strat_HYP","Iso_Bot","Iso_Top","Iso_Mid","InvS_EPI","InvS_HYP"))
+SSF_cold <- get_heart2("SSF Chloro", "SSF", W_SSF, wanted, value_num = 3/ncol(W_SSF), show_x = FALSE)
+
+#LSF
+wanted <- subset(LSF_meta, new_depths_mdh2 %in% c("Strat_HYP","Iso_Bot","Iso_Top","Iso_Mid","InvS_EPI","InvS_HYP"))
+LSF_cold <- get_heart2("LSF Chloro", "LSF", W_LSF, wanted, value_num = 3/ncol(W_LSF), show_x = TRUE)
+
+##save
+figure <- plot_grid(FL_cold, PA_cold, SSF_cold, LSF_cold,
+                    ncol = 1, rel_heights = c(1, 1, 1, 1.5))
+figure <- ggpubr::annotate_figure(figure,
+                top = ggpubr::text_grob("Cold Waters", color = "black", face = "bold", size = 14))
+ggsave(file = "output/plots/ALL/cold_water.png", figure,
+       width = 10, height = 12, units = "in", dpi = 1000)
+figure
+```
+
+
+
