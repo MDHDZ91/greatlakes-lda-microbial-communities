@@ -9,6 +9,7 @@ This repository contains the analysis code accompanying Hernández Limón et al.
 This code is provided as a reproducible record of the analyses described in the manuscript, applied to four size-fractionated biological blocks (FL, PA, SSF, LSF). It is not a general-purpose package. Users wishing to apply this workflow to their own data should use the code as a reference and adapt inputs, parameters (including optimal k), and block structure accordingly
 
 ## Repository Structure
+```
 greatlakes-lda-microbial-communities/
 ├── README.md                        ← this file
 ├── LICENSE                          ← MIT license
@@ -20,6 +21,7 @@ greatlakes-lda-microbial-communities/
 │       └── submit_perplexity.sh     ← SLURM submission script for HPC
 └── figures/
     └── manuscript_figures.pdf       ← all manuscript figures
+```
 
 ## Requirements
 All analyses were conducted in R v4.5.3. For a full list of packages and versions see the Methods section of the accompanying manuscript. The core method relies on the alto package (v0.1.0) for LDA topic modeling. For a full list of packages and versions see the Methods section of the accompanying manuscript.
