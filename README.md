@@ -37,7 +37,7 @@ Continue through steps 4–5 for GoMDE (fingerprint taxa), Limma and Random Fore
 
 ## Citation
 If you use this code or a verion of this pipeline please cite:
-Hernández Limón MD, Donnat C, Bunbury F, Coleman ML. Topic modeling reveals thermally partitioned and taxonomically distinct microbial subcommunities across prokaryotes and phytoplankton in the Laurentian Great Lakes. bioRxiv 2026. DOI: [to be added upon posting]
+Hernández Limón MD, Donnat C, Bunbury F, Coleman ML. Topic modeling reveals thermally partitioned and taxonomically distinct microbial subcommunities across prokaryotes and phytoplankton in the Laurentian Great Lakes. bioRxiv 2026. DOI:https://doi.org/10.64898/2026.06.06.730626 
 
 ## Data Availability
 Sequences are deposited in NCBI under BioProject accession number PRJNA1259575 and will be made publicly available upon peer-reviewed publication of the companion manuscript.
